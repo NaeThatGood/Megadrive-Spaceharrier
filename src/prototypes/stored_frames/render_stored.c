@@ -29,10 +29,10 @@ static void st_init(void)
 
 static void st_spawn(WObj* o)
 {
-    o->spr = SPR_addSprite(&spr_enemy_scaled, -128, -128,
+    o->sprs[0] = SPR_addSprite(&spr_enemy_scaled, -128, -128,
                            TILE_ATTR(PAL2, 0, FALSE, FALSE));
     o->sizeIdx = 0;
-    SPR_setFrame(o->spr, 0);
+    SPR_setFrame(o->sprs[0], 0);
 }
 
 static void st_update(WObj* o, s16 sx, s16 syBottom, u16 sizePx)
@@ -41,22 +41,22 @@ static void st_update(WObj* o, s16 sx, s16 syBottom, u16 sizePx)
     if (frame != o->sizeIdx)
     {
         o->sizeIdx = frame;
-        SPR_setFrame(o->spr, frame);
+        SPR_setFrame(o->sprs[0], frame);
     }
     // all frames: 64x64 canvas, bottom-centre anchor
-    SPR_setPosition(o->spr, sx - (FRAME_CANVAS / 2), syBottom - FRAME_CANVAS);
+    SPR_setPosition(o->sprs[0], sx - (FRAME_CANVAS / 2), syBottom - FRAME_CANVAS);
 }
 
 static void st_despawn(WObj* o)
 {
-    if (o->spr)
+    if (o->sprs[0])
     {
-        SPR_releaseSprite(o->spr);
-        o->spr = NULL;
+        SPR_releaseSprite(o->sprs[0]);
+        o->sprs[0] = NULL;
     }
 }
 
 const Renderer RENDER_stored =
 {
-    "STORED ", st_init, st_spawn, st_update, st_despawn
+    "STORED ", st_init, st_spawn, st_update, st_despawn, NULL
 };

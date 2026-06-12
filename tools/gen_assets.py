@@ -171,6 +171,34 @@ def gen_enemy():
     print("wrote enemy_src.png, enemy16.png")
 
 
+def gen_runtime_assets():
+    """Assets for the runtime-scaling renderer.
+
+    enemy_src.bin: the 64x64 master sprite as packed 4bpp (2 px/byte,
+    high nibble = left pixel), row-major. Read directly by the 68000
+    software scaler.
+
+    quad32.png: fully opaque 32x32 dummy sprite. Compiled with
+    OPTIMIZATION NONE it yields exactly one 32x32 hardware sprite whose
+    16 tiles we overwrite at runtime with scaled data (its ROM tiles are
+    never uploaded).
+    """
+    src = Image.open(os.path.join(SPRITES, "enemy_src.png"))
+    w, h = src.size
+    data = bytearray()
+    pix = src.load()
+    for y in range(h):
+        for x in range(0, w, 2):
+            data.append(((pix[x, y] & 0xF) << 4) | (pix[x + 1, y] & 0xF))
+    with open(os.path.join(SPRITES, "enemy_src.bin"), "wb") as f:
+        f.write(data)
+
+    quad = Image.new("P", (32, 32), 1)
+    quad.putpalette(make_palette(ENEMY_PALETTE))
+    quad.save(os.path.join(SPRITES, "quad32.png"))
+    print(f"wrote enemy_src.bin ({len(data)} bytes), quad32.png")
+
+
 def gen_shot():
     img = Image.new("P", (8, 8), 0)
     img.putpalette(make_palette(ENEMY_PALETTE))
@@ -187,4 +215,5 @@ if __name__ == "__main__":
     gen_ground()
     gen_player()
     gen_enemy()
+    gen_runtime_assets()
     gen_shot()

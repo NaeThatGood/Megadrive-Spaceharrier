@@ -253,6 +253,7 @@ int main(bool hardReset)
 
         updateObjects();
         updateShots();
+        if (renderer->frame) renderer->frame();
 
         GROUND_update(playerX - PLAYER_CENTER_X, 4);
 

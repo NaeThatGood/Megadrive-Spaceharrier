@@ -37,8 +37,8 @@ typedef struct WObj
     u16     z;
     s16     vx;
     u16     vz;         // approach speed (subtracted from z each frame)
-    u8      sizeIdx;    // current scale bucket (renderer bookkeeping)
-    Sprite* spr;        // sprite-engine handle (renderer bookkeeping)
+    u8      sizeIdx;    // current frame bucket / cached size (renderer data)
+    Sprite* sprs[4];    // sprite-engine handles (renderer bookkeeping)
     u16     vramIndex;  // VRAM tile slot (runtime renderer bookkeeping)
 } WObj;
 
@@ -76,6 +76,7 @@ typedef struct
     void (*spawn)(WObj* o);          // object appeared
     void (*update)(WObj* o, s16 sx, s16 syBottom, u16 sizePx);
     void (*despawn)(WObj* o);        // object removed
+    void (*frame)(void);             // once per frame, after all updates (may be NULL)
 } Renderer;
 
 extern const Renderer RENDER_stored;
