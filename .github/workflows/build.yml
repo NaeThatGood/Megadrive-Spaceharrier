@@ -13,7 +13,7 @@ jobs:
       # Build with the official SGDK Docker image (reproducible Linux build,
       # independent of the local macOS toolchain).
       - name: Build ROM with SGDK
-        run: docker run --rm -v "$PWD":/src ghcr.io/stephane-d/sgdk:latest
+        run: docker run --rm -v "$PWD":/src -u "$(id -u):$(id -g)" ghcr.io/stephane-d/sgdk:latest
 
       - name: Upload ROM artifact
         uses: actions/upload-artifact@v4
