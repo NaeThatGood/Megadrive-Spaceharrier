@@ -181,6 +181,11 @@ static void updateShots(void)
 
 // --- Mode switch ------------------------------------------------------------
 
+static void playGetReady(void)
+{
+    XGM2_playPCM(snd_getready, sizeof(snd_getready), SOUND_PCM_CH_AUTO);
+}
+
 static void setRenderer(const Renderer* r)
 {
     for (u16 i = 0; i < MAX_OBJECTS; i++)
@@ -191,6 +196,8 @@ static void setRenderer(const Renderer* r)
 
     for (u16 i = 0; i < MAX_OBJECTS; i++)
         if (objects[i].active) renderer->spawn(&objects[i]);
+
+    playGetReady();
 }
 
 // --- Input ------------------------------------------------------------------
@@ -239,6 +246,8 @@ int main(bool hardReset)
 
     renderer = &RENDER_stored;
     renderer->init();
+
+    playGetReady();
 
     while (TRUE)
     {

@@ -10,8 +10,8 @@ const ROMHeader rom_header = {
     "SEGA MEGA DRIVE ",
 #endif
     "(C)SGDK 2026    ",
-    "SAMPLE PROGRAM                                  ",
-    "SAMPLE PROGRAM                                  ",
+    "SKY RUSH PROTO - SPRITE SCALING TEST            ",
+    "SKY RUSH PROTO - SPRITE SCALING TEST            ",
     "GM 00000000-00",
     0x000,
     "JD              ",
