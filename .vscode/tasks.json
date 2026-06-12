@@ -1,0 +1,33 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "MD: Build ROM",
+            "type": "shell",
+            "command": "make build",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "MD: Clean",
+            "type": "shell",
+            "command": "make clean",
+            "problemMatcher": []
+        },
+        {
+            "label": "MD: Run in emulator",
+            "type": "shell",
+            "command": "make run",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "MD: Rebuild + Run",
+            "type": "shell",
+            "command": "make rebuild-run",
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}

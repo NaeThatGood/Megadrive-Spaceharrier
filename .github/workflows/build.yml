@@ -1,0 +1,23 @@
+name: Build ROM
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build with the official SGDK Docker image (reproducible Linux build,
+      # independent of the local macOS toolchain).
+      - name: Build ROM with SGDK
+        run: docker run --rm -v "$PWD":/src ghcr.io/stephane-d/sgdk:latest
+
+      - name: Upload ROM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spaceharrier-proto-rom
+          path: out/rom.bin
+          if-no-files-found: error

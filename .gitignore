@@ -1,0 +1,14 @@
+# Build output
+out/
+.logs/
+
+# SGDK checkout and locally-built tools (see README for setup)
+tools/sgdk/
+tools/bin/
+tools/venv/
+
+# OS noise
+.DS_Store
+
+# Local video captures etc.
+Video/
