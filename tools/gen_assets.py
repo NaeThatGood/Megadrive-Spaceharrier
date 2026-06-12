@@ -125,7 +125,66 @@ def gen_player():
     print("wrote player.png")
 
 
+# Shared palette for enemy + shot sprites (PAL2 at runtime).
+ENEMY_PALETTE = [
+    (255, 0, 255),    # 0 transparent
+    (24, 16, 24),     # 1 outline
+    (208, 56, 48),    # 2 body red
+    (144, 32, 32),    # 3 body shadow
+    (188, 196, 208),  # 4 dome light
+    (120, 132, 148),  # 5 dome dark
+    (240, 240, 240),  # 6 eye white
+    (32, 32, 80),     # 7 pupil
+    (248, 216, 64),   # 8 shot yellow
+    (240, 144, 48),   # 9 shot orange
+    (255, 255, 255),  # 10 highlight
+]
+
+
+def gen_enemy():
+    """64x64 master sprite: original one-eyed hover-drone placeholder."""
+    W = H = 64
+    img = Image.new("P", (W, H), 0)
+    img.putpalette(make_palette(ENEMY_PALETTE))
+    d = ImageDraw.Draw(img)
+
+    # Body: red saucer
+    d.ellipse([4, 26, 60, 50], fill=2, outline=1)
+    d.ellipse([10, 30, 54, 44], fill=3)
+    # Dome on top
+    d.ellipse([16, 8, 48, 40], fill=4, outline=1)
+    d.ellipse([20, 12, 44, 30], fill=5)
+    # Big single eye
+    d.ellipse([24, 16, 40, 32], fill=6, outline=1)
+    d.ellipse([29, 21, 35, 27], fill=7)
+    d.point((30, 22), fill=10)
+    # Underside thruster nubs
+    for cx in (14, 32, 50):
+        d.ellipse([cx - 4, 48, cx + 4, 56], fill=5, outline=1)
+        d.ellipse([cx - 2, 52, cx + 2, 58], fill=9)
+
+    img.save(os.path.join(SPRITES, "enemy_src.png"))
+
+    # Interim 16x16 version (used before stored scale frames exist)
+    small = img.resize((16, 16), Image.NEAREST)
+    small.save(os.path.join(SPRITES, "enemy16.png"))
+    print("wrote enemy_src.png, enemy16.png")
+
+
+def gen_shot():
+    img = Image.new("P", (8, 8), 0)
+    img.putpalette(make_palette(ENEMY_PALETTE))
+    d = ImageDraw.Draw(img)
+    d.ellipse([0, 0, 7, 7], fill=9)
+    d.ellipse([1, 1, 6, 6], fill=8)
+    d.ellipse([2, 2, 4, 4], fill=10)
+    img.save(os.path.join(SPRITES, "shot.png"))
+    print("wrote shot.png")
+
+
 if __name__ == "__main__":
     os.makedirs(SPRITES, exist_ok=True)
     gen_ground()
     gen_player()
+    gen_enemy()
+    gen_shot()
