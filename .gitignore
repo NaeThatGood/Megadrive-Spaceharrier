@@ -12,3 +12,4 @@ tools/venv/
 
 # Local video captures etc.
 Video/
+src/rom_header.c
