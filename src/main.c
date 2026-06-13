@@ -6,26 +6,22 @@
 
 // --- Player -----------------------------------------------------------------
 
-#define PLAYER_W        32
-#define PLAYER_H        48
+#define PLAYER_W        64
+#define PLAYER_H        96
 
 #define PLAYER_MIN_X    8
 #define PLAYER_MAX_X    (320 - PLAYER_W - 8)
-#define PLAYER_MIN_Y    (GROUND_HORIZON - 8)
-#define PLAYER_MAX_Y    (224 - PLAYER_H - 4)
+#define PLAYER_MIN_Y    16
+#define PLAYER_FEET_Y   (PLAYER_H - 20)   // matches playerWorldY() reference
+#define PLAYER_GROUND_SINK  8             // feet dip into checker when low
 
-#define PLAYER_SPEED    3
+#define PLAYER_SPEED    6
 #define PLAYER_CENTER_X ((320 - PLAYER_W) / 2)
-
-// Bottom of a ground object when right at the player plane
-#define NEAR_GROUND_Y   (GROUND_HORIZON + WORLD_GROUND_DEPTH)
-
-#define SHOT_SPEED      110
-#define SPAWN_INTERVAL  40
 
 static Sprite* player;
 static s16 playerX;
 static s16 playerY;
+static s16 playerMaxY;     // lowest Y (ground hover); depends on screen height
 
 static WObj  objects[MAX_OBJECTS];
 static WShot shots[MAX_SHOTS];
@@ -35,6 +31,7 @@ static u16 hits;
 static u16 spawnTimer;
 static u16 hurtFlash;
 static u16 prevJoy;
+static bool paused;
 
 // --- Helpers ----------------------------------------------------------------
 
@@ -45,8 +42,10 @@ static s16 playerWorldX(void)
 
 static s16 playerWorldY(void)
 {
-    // Height of the player's torso above the ground plane, world units
-    return NEAR_GROUND_Y - (playerY + PLAYER_H - 10);
+    // Height of the player's torso above the ground plane, world units.
+    // GROUND_horizon + WORLD_GROUND_DEPTH = bottom of a ground object
+    // right at the player plane.
+    return (GROUND_horizon + WORLD_GROUND_DEPTH) - (playerY + PLAYER_H - 20);
 }
 
 static u16 countObjects(void)
@@ -67,11 +66,14 @@ static void spawnObject(void)
         if (o->active) continue;
 
         o->active = TRUE;
+        o->vramIndex = 0;
+        o->sizeIdx = 0;
+        for (u8 q = 0; q < 4; q++) o->sprs[q] = NULL;
         o->wx = (s16) (random() % 281) - 140;
         o->wy = (random() & 1) ? 0 : (s16) (20 + (random() % 51));
         o->z  = WORLD_Z_FAR;
         o->vx = (s16) (random() % 5) - 2;
-        o->vz = 24 + (random() & 15);
+        o->vz = WORLD_APPROACH_VZ_BASE + (random() & WORLD_APPROACH_VZ_RAND);
         renderer->spawn(o);
         return;
     }
@@ -98,7 +100,7 @@ static void updateObjects(void)
         if (o->z <= WORLD_Z_NEAR + o->vz)
         {
             // Reached the player plane: collision check, then leave
-            if (abs(o->wx - pwx) < 40 && abs(o->wy - pwy) < 48)
+            if (abs(o->wx - pwx) < 80 && abs(o->wy - pwy) < 96)
                 hurtFlash = 16;
             killObject(o);
             continue;
@@ -122,7 +124,7 @@ static void fireShot(void)
 
         s->active = TRUE;
         s->wx = playerWorldX();
-        s->wy = playerWorldY() + 14;   // cannon height
+        s->wy = playerWorldY() + 28;   // cannon height
         s->z  = WORLD_Z_NEAR;
         s->spr = SPR_addSprite(&spr_shot, -16, -16,
                                TILE_ATTR(PAL2, 0, FALSE, FALSE));
@@ -144,12 +146,12 @@ static void updateShots(void)
         WShot* s = &shots[i];
         if (!s->active) continue;
 
-        if (s->z >= WORLD_Z_FAR - SHOT_SPEED)
+        if (s->z >= WORLD_Z_FAR - WORLD_SHOT_SPEED)
         {
             killShot(s);
             continue;
         }
-        s->z += SHOT_SPEED;
+        s->z += WORLD_SHOT_SPEED;
 
         // Hit test against objects
         bool hit = FALSE;
@@ -188,16 +190,36 @@ static void playGetReady(void)
 
 static void setRenderer(const Renderer* r)
 {
+    DMA_waitCompletion();
+    SPR_update();
+
     for (u16 i = 0; i < MAX_OBJECTS; i++)
         if (objects[i].active) renderer->despawn(&objects[i]);
+
+    SPR_update();
 
     renderer = r;
     renderer->init();
 
+    if (renderer == &RENDER_runtime && RUNTIME_slotCapacity() == 0)
+    {
+        renderer = &RENDER_stored;
+        renderer->init();
+    }
+    else if (renderer == &RENDER_runtime)
+    {
+        u8 cap = RUNTIME_slotCapacity();
+        u8 kept = 0;
+        for (u16 i = 0; i < MAX_OBJECTS; i++)
+        {
+            if (!objects[i].active) continue;
+            if (kept >= cap) killObject(&objects[i]);
+            else kept++;
+        }
+    }
+
     for (u16 i = 0; i < MAX_OBJECTS; i++)
         if (objects[i].active) renderer->spawn(&objects[i]);
-
-    playGetReady();
 }
 
 // --- Input ------------------------------------------------------------------
@@ -208,6 +230,15 @@ static void handleInput(void)
     const u16 pressed = joy & ~prevJoy;
     prevJoy = joy;
 
+    if (pressed & BUTTON_START)
+        paused = !paused;
+
+    if (pressed & BUTTON_C)
+        setRenderer((renderer == &RENDER_stored) ? &RENDER_runtime
+                                                 : &RENDER_stored);
+
+    if (paused) return;
+
     if (joy & BUTTON_LEFT)  playerX -= PLAYER_SPEED;
     if (joy & BUTTON_RIGHT) playerX += PLAYER_SPEED;
     if (joy & BUTTON_UP)    playerY -= PLAYER_SPEED;
@@ -216,14 +247,10 @@ static void handleInput(void)
     if (playerX < PLAYER_MIN_X) playerX = PLAYER_MIN_X;
     if (playerX > PLAYER_MAX_X) playerX = PLAYER_MAX_X;
     if (playerY < PLAYER_MIN_Y) playerY = PLAYER_MIN_Y;
-    if (playerY > PLAYER_MAX_Y) playerY = PLAYER_MAX_Y;
+    if (playerY > playerMaxY)   playerY = playerMaxY;
 
-    if (pressed & (BUTTON_A | BUTTON_B | BUTTON_C))
+    if (pressed & (BUTTON_A | BUTTON_B))
         fireShot();
-
-    if (pressed & BUTTON_START)
-        setRenderer((renderer == &RENDER_stored) ? &RENDER_runtime
-                                                 : &RENDER_stored);
 }
 
 // --- Main -------------------------------------------------------------------
@@ -232,15 +259,24 @@ int main(bool hardReset)
 {
     (void) hardReset;
 
+    // Highest progressive resolution: 320x240 (H40/V30), PAL only - V30
+    // does not display on NTSC hardware, which falls back to 320x224.
     VDP_setScreenWidth320();
-    SPR_init();
+    if (IS_PAL_SYSTEM) VDP_setScreenHeight240();
 
+    // Ground first: stabilises TILE_MAX_NUM, then reserve VRAM after the
+    // ground tileset for runtime scaling slots before the sprite pool exists.
     GROUND_init();
+    SPR_initEx(RUNTIME_spriteVramBudget());
+
     HUD_init();
+
+    playerMaxY = GROUND_HORIZON + WORLD_GROUND_DEPTH
+               - PLAYER_FEET_Y + PLAYER_GROUND_SINK;
 
     PAL_setPalette(PAL1, spr_player.palette->data, CPU);
     playerX = PLAYER_CENTER_X;
-    playerY = PLAYER_MAX_Y - 16;
+    playerY = playerMaxY - 8;
     player = SPR_addSprite(&spr_player, playerX, playerY,
                            TILE_ATTR(PAL1, 0, FALSE, FALSE));
 
@@ -253,24 +289,31 @@ int main(bool hardReset)
     {
         handleInput();
 
-        spawnTimer++;
-        if (spawnTimer >= SPAWN_INTERVAL)
+        if (!paused)
         {
-            spawnTimer = 0;
-            spawnObject();
-        }
+            // Ground first: it sets GROUND_horizon, which the projection of
+            // every object and shot below depends on.
+            const s16 pitchY = ((PLAYER_MIN_Y + playerMaxY) / 2) - playerY;
+            GROUND_update(playerX - PLAYER_CENTER_X, pitchY, playerWorldX(),
+                          GROUND_FORWARD_SPEED);
 
-        updateObjects();
-        updateShots();
-        if (renderer->frame) renderer->frame();
+            spawnTimer++;
+            if (spawnTimer >= WORLD_SPAWN_INTERVAL)
+            {
+                spawnTimer = 0;
+                spawnObject();
+            }
 
-        GROUND_update(playerX - PLAYER_CENTER_X, 4);
+            updateObjects();
+            updateShots();
+            if (renderer->frame) renderer->frame();
 
-        if (hurtFlash)
-        {
-            hurtFlash--;
-            PAL_setColor(0, (hurtFlash & 4) ? RGB24_TO_VDPCOLOR(0xC00000)
-                                            : RGB24_TO_VDPCOLOR(0x000000));
+            if (hurtFlash)
+            {
+                hurtFlash--;
+                PAL_setColor(0, (hurtFlash & 4) ? RGB24_TO_VDPCOLOR(0xC00000)
+                                                : RGB24_TO_VDPCOLOR(0x000000));
+            }
         }
 
         HUD_update(renderer->name, countObjects(), hits);
@@ -278,6 +321,7 @@ int main(bool hardReset)
         SPR_setPosition(player, playerX, playerY);
         SPR_update();
         SYS_doVBlankProcess();
+        VDP_waitVSync();   // second PAL VBlank -> 25 Hz game loop
     }
 
     return 0;

@@ -35,9 +35,13 @@ ARES := $(shell command -v ares 2>/dev/null)
 endif
 
 ifneq ($(BLASTEM),)
+# Force PAL: the ROM targets 320x240 (V30), which needs a 50 Hz machine
 EMU := $(BLASTEM)
+EMUFLAGS := -r E
 else
+# ares picks PAL automatically from the ROM header region field (E)
 EMU := $(ARES)
+EMUFLAGS :=
 endif
 
 .PHONY: build clean run run-ares rebuild-run sgdk-lib
@@ -49,7 +53,7 @@ clean:
 	$(MAKE) -f $(GDK)/makefile.gen clean
 
 run: build
-	$(EMU) $(ROM)
+	$(EMU) $(EMUFLAGS) $(ROM)
 
 run-ares: build
 	$(ARES) $(ROM)
