@@ -10,21 +10,38 @@
 //   wx: lateral position in "screen pixels at z = WORLD_Z_NEAR" units
 //   wy: height above the ground plane, same units (0 = on the ground)
 //
-// Projection (vanishing point at (160, GROUND_HORIZON)):
+// Projection (vanishing point at (160, GROUND_horizon)):
 //   screenX       = 160 + wx * Z_NEAR / z
-//   screenYBottom = HORIZON + (GROUND_DEPTH - wy) * Z_NEAR / z
+//   screenYBottom = GROUND_horizon + (GROUND_DEPTH - wy) * Z_NEAR / z
 //   spritePixels  = baseSize * Z_NEAR / z
+//
+// GROUND_horizon is a runtime value: the ground renderer moves the horizon
+// with player altitude (SH2-style V-scroll), and the projection follows so
+// objects stay planted on the floor.
 // ---------------------------------------------------------------------------
 
 #define WORLD_Z_NEAR    256
 #define WORLD_Z_FAR     4096
 
+// Game logic runs at 25 Hz (every 2nd PAL VBlank) to leave CPU headroom for
+// runtime scaling. Constants are 2x the old 50 Hz values so motion still
+// matches arcade Space Harrier pacing.
+#define GROUND_FORWARD_SPEED    20
+#define WORLD_APPROACH_VZ_BASE  116
+#define WORLD_APPROACH_VZ_RAND  62      // vz in [BASE, BASE + RAND]
+#define WORLD_SHOT_SPEED        528
+#define WORLD_SPAWN_INTERVAL    8
+
 // Ground plane depth offset: bottom of a ground object at z = Z_NEAR
-// sits at HORIZON + GROUND_DEPTH pixels.
+// sits at GROUND_horizon + GROUND_DEPTH pixels.
 #define WORLD_GROUND_DEPTH  110
 
 #define MAX_OBJECTS     8
 #define MAX_SHOTS       4
+
+// Runtime renderer: each object owns this many VRAM tiles (see render_runtime.c).
+#define RT_SLOT_TILES       64
+#define RT_RESERVED_TILES   (MAX_OBJECTS * RT_SLOT_TILES)
 
 // Object base size in pixels when at z = WORLD_Z_NEAR
 #define OBJ_BASE_SIZE   64
@@ -58,7 +75,7 @@ static inline s16 WORLD_screenX(s16 wx, u16 z)
 
 static inline s16 WORLD_screenYBottom(s16 wy, u16 z)
 {
-    return GROUND_HORIZON +
+    return GROUND_horizon +
         (s16) (((s32) (WORLD_GROUND_DEPTH - wy) * WORLD_Z_NEAR) / z);
 }
 
@@ -81,5 +98,13 @@ typedef struct
 
 extern const Renderer RENDER_stored;
 extern const Renderer RENDER_runtime;
+
+// Valid after RENDER_runtime.init(); may be < MAX_OBJECTS when ground tiles
+// leave little user VRAM below the sprite-engine pool.
+u8 RUNTIME_slotCapacity(void);
+
+// Call after GROUND_init() to size the sprite-engine pool so runtime object
+// slots can live after the ground tileset without overlapping it or crashing.
+u16 RUNTIME_spriteVramBudget(void);
 
 #endif

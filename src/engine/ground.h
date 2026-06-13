@@ -3,13 +3,22 @@
 
 #include <genesis.h>
 
-// First scanline of the ground area (must match tools/gen_assets.py)
+// On-screen horizon scanline (fixed).  Vertical pitch is done by V-scrolling
+// a taller board bitmap; world projection uses GROUND_horizon (set each frame).
 #define GROUND_HORIZON  96
+
+// Current on-screen horizon scanline; used by the world projection so
+// sprites stay glued to the floor as the horizon moves.
+extern s16 GROUND_horizon;
 
 void GROUND_init(void);
 
-// swayX: lateral offset in pixels (positive = world moves left, i.e. player
-//        moved right). speed: forward speed 0..8 controlling checker cycling.
-void GROUND_update(s16 swayX, u16 speed);
+// swayX:   lateral offset in pixels (positive = world moves left, i.e.
+//          player moved right)
+// pitchY:  vertical offset from mid-travel (positive = player high on screen)
+// vanishX: player world X for vanishing-point tracking
+// speed:   forward speed driving the checker palette animation (use
+//          GROUND_FORWARD_SPEED for arcade-like baseline)
+void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed);
 
 #endif

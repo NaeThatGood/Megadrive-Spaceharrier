@@ -25,7 +25,7 @@
 #define RT_MIN_SIZE     8
 #define RT_MAX_SIZE     64
 
-#define SLOT_TILES      64                  // 4 quads x 16 tiles
+#define SLOT_TILES      RT_SLOT_TILES
 #define SLOT_BYTES      (SLOT_TILES * 32)
 #define QUAD_BYTES      (16 * 32)
 
@@ -37,16 +37,19 @@ static u8 srcOff[RT_MAX_SIZE];
 static u8 srcShift[RT_MAX_SIZE];
 
 static u16 vramBase;
-static u8  slotsUsed;                       // bitmask, MAX_OBJECTS <= 8
+static u8  rtMaxSlots;                      // limited by user VRAM below sprite pool
+static u8  slotsUsed;                       // bitmask, rtMaxSlots <= MAX_OBJECTS
 
 // rescale candidate for this frame
 static WObj* candObj;
 static u16   candScore;
 static u8    candSize;
 
+#define RT_NO_SLOT  0xFF
+
 static u8 allocSlot(void)
 {
-    for (u8 i = 0; i < MAX_OBJECTS; i++)
+    for (u8 i = 0; i < rtMaxSlots; i++)
     {
         if (!(slotsUsed & (1 << i)))
         {
@@ -54,7 +57,35 @@ static u8 allocSlot(void)
             return i;
         }
     }
-    return 0; // cannot happen: slots == MAX_OBJECTS
+    return RT_NO_SLOT;
+}
+
+static void freeSlot(WObj* o)
+{
+    if (o->vramIndex < vramBase) return;
+
+    const u16 rel = o->vramIndex - vramBase;
+    if (rel >= (u16) (rtMaxSlots * SLOT_TILES)) return;
+
+    slotsUsed &= ~(1 << (rel / SLOT_TILES));
+}
+
+u8 RUNTIME_slotCapacity(void)
+{
+    return rtMaxSlots;
+}
+
+u16 RUNTIME_spriteVramBudget(void)
+{
+    const u16 rtEnd = TILE_USER_INDEX + img_ground.tileset->numTile
+                    + RT_RESERVED_TILES - 1;
+
+    if (rtEnd >= TILE_MAX_NUM) return 420;
+
+    u16 sprVram = (u16) (TILE_MAX_NUM - rtEnd - 1);
+    if (sprVram < 256) sprVram = 256;
+    if (sprVram > 420) sprVram = 420;
+    return sprVram;
 }
 
 // --- The scaler -------------------------------------------------------------
@@ -124,6 +155,8 @@ static void scaleInto(const u8* src, u8 size, u16 clearBytes)
 
 static void rescaleObject(WObj* o, u8 size)
 {
+    if (!o->sprs[0]) return;
+
     // upload: 1 quad when <= 32 px, all 4 otherwise
     const u16 bytes = (size <= 32) ? QUAD_BYTES : SLOT_BYTES;
 
@@ -131,6 +164,9 @@ static void rescaleObject(WObj* o, u8 size)
     o->sizeIdx = size;
 
     const u32 vramAddr = (u32) (o->vramIndex) * 32;
+    const u32 vramEnd = vramAddr + bytes - 1;
+    if (vramEnd > (u32) TILE_USER_MAX_INDEX * 32) return;
+
     DMA_queueDma(DMA_VRAM, scaleBuf, vramAddr, bytes / 2, 2);
 }
 
@@ -140,16 +176,35 @@ static void rt_init(void)
 {
     PAL_setPalette(PAL2, spr_enemy_scaled.palette->data, CPU);
 
-    // Fixed VRAM region for all slots, at the top of the user tile area
-    // (just below the sprite engine region).
-    vramBase = TILE_USER_MAX_INDEX + 1 - (MAX_OBJECTS * SLOT_TILES);
+    // Slots sit immediately after the ground tileset so DMA never clobbers
+    // floor tiles. Boot calls SPR_initEx(RUNTIME_spriteVramBudget()) so the
+    // sprite pool starts just above the last slot (no crash, no banding).
+    vramBase = TILE_USER_INDEX + img_ground.tileset->numTile;
+
+    const u16 slotsEnd = vramBase + RT_RESERVED_TILES - 1;
+    if (slotsEnd <= TILE_USER_MAX_INDEX)
+        rtMaxSlots = MAX_OBJECTS;
+    else if (vramBase > TILE_USER_MAX_INDEX)
+        rtMaxSlots = 0;
+    else
+        rtMaxSlots = (u8) ((TILE_USER_MAX_INDEX + 1 - vramBase) / SLOT_TILES);
+
     slotsUsed = 0;
     candObj = NULL;
+    candScore = 0;
 }
 
 static void rt_spawn(WObj* o)
 {
     const u8 slot = allocSlot();
+    if (slot == RT_NO_SLOT)
+    {
+        o->vramIndex = 0;
+        o->sizeIdx = 0;
+        for (u8 q = 0; q < 4; q++) o->sprs[q] = NULL;
+        return;
+    }
+
     o->vramIndex = vramBase + slot * SLOT_TILES;
     o->sizeIdx = 0;   // forces a rescale as soon as possible
 
@@ -159,12 +214,25 @@ static void rt_spawn(WObj* o)
             TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE,
                            o->vramIndex + q * 16),
             0);
+        if (!o->sprs[q])
+        {
+            for (u8 r = 0; r < q; r++)
+            {
+                if (o->sprs[r]) SPR_releaseSprite(o->sprs[r]);
+                o->sprs[r] = NULL;
+            }
+            freeSlot(o);
+            o->vramIndex = 0;
+            return;
+        }
         SPR_setVisibility(o->sprs[q], HIDDEN);
     }
 }
 
 static void rt_update(WObj* o, s16 sx, s16 syBottom, u16 sizePx)
 {
+    if (!o->sprs[0]) return;
+
     u8 target = (sizePx < RT_MIN_SIZE) ? RT_MIN_SIZE
               : (sizePx > RT_MAX_SIZE) ? RT_MAX_SIZE
               : (u8) sizePx;
@@ -226,18 +294,23 @@ static void rt_despawn(WObj* o)
             o->sprs[q] = NULL;
         }
     }
-    slotsUsed &= ~(1 << ((o->vramIndex - vramBase) / SLOT_TILES));
+    freeSlot(o);
+    o->vramIndex = 0;
     if (candObj == o) candObj = NULL;
 }
 
 static void rt_frame(void)
 {
-    if (candObj)
+    if (!candObj || !candObj->active || !candObj->sprs[0])
     {
-        rescaleObject(candObj, candSize);
         candObj = NULL;
         candScore = 0;
+        return;
     }
+
+    rescaleObject(candObj, candSize);
+    candObj = NULL;
+    candScore = 0;
 }
 
 const Renderer RENDER_runtime =
