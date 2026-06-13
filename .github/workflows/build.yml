@@ -2,7 +2,11 @@ name: Build ROM
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -15,9 +19,32 @@ jobs:
       - name: Build ROM with SGDK
         run: docker run --rm -v "$PWD":/src -u "$(id -u):$(id -g)" ghcr.io/stephane-d/sgdk:latest
 
-      - name: Upload ROM artifact
+      - name: Package PR ROM
+        if: github.event_name == 'pull_request'
+        run: cp out/rom.bin "out/sky-rush-proto-pr-${{ github.event.pull_request.number }}.bin"
+
+      - name: Upload PR ROM
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: spaceharrier-proto-rom
-          path: out/rom.bin
+          name: sky-rush-proto-pr-${{ github.event.pull_request.number }}
+          path: out/sky-rush-proto-pr-${{ github.event.pull_request.number }}.bin
           if-no-files-found: error
+
+      - name: Package production ROM
+        if: github.event_name == 'push'
+        run: cp out/rom.bin out/sky-rush-proto.bin
+
+      - name: Publish production ROM
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Sky Rush Proto (latest)
+          body: |
+            Production build from main @ ${{ github.sha }}
+
+            Download `sky-rush-proto.bin` below.
+          files: out/sky-rush-proto.bin
+          make_latest: true
+          overwrite_files: true

@@ -105,12 +105,30 @@ Use the official SGDK Windows release, which bundles the whole toolchain:
 ### No local toolchain at all?
 
 Every push to GitHub builds the ROM with the official SGDK Docker image
-(`.github/workflows/build.yml`) and uploads `rom.bin` as a downloadable
-artifact. If you have Docker locally you can do the same:
+(`.github/workflows/build.yml`). If you have Docker locally you can do the
+same:
 
 ```sh
 docker run --rm -v "$PWD":/src -u "$(id -u):$(id -g)" ghcr.io/stephane-d/sgdk:latest
 ```
+
+## Download ROMs
+
+GitHub is the source of truth for playable builds.
+
+| Build | File | Where to get it |
+| --- | --- | --- |
+| **Production** (current `main`) | `sky-rush-proto.bin` | [Latest release](https://github.com/NaeThatGood/Megadrive-Spaceharrier/releases/tag/latest) |
+| **Pull request** #N | `sky-rush-proto-pr-N.bin` | Open the PR → **Checks** → **Build ROM** → **Artifacts** |
+
+Production (CLI):
+
+```sh
+gh release download latest --repo NaeThatGood/Megadrive-Spaceharrier --pattern 'sky-rush-proto.bin' -D .
+```
+
+Each merged PR updates the production release; PR artifacts stay available on
+that PR's workflow runs (GitHub retains them for 90 days).
 
 ## Build and run
 
