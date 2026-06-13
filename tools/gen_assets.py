@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
-"""Generate original placeholder art for the Space Harrier-style prototype.
+"""Generate placeholder / ripped art for the Space Harrier-style prototype.
 
-All art is produced procedurally (no copyrighted material). Outputs indexed
-PNGs compatible with SGDK's rescomp (16 colours max per image, colour 0 =
-transparent for sprites / backdrop for images).
+Ground plane sky + checkerboard are procedural. Mountain horizon is ripped
+from the arcade gfx1 tile ROMs when SH MAME ROM/ is present (see
+rip_mountains_arcade.py). Outputs indexed PNGs for SGDK rescomp.
 
 Outputs:
-  res/sprites/ground.png   320x224 sky + perspective checkerboard (PAL0)
+  res/sprites/ground.png   320x352 sky + perspective checkerboard plane (PAL0)
   res/sprites/player.png   32x48 player character sprite sheet, 1 frame (PAL1)
 """
 
 import math
 import os
+import sys
 
 from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPRITES = os.path.join(ROOT, "res", "sprites")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from rip_mountains_arcade import extract_mountain_strip
+from rip_player_x68 import rip as rip_player
 
-SCREEN_W, SCREEN_H = 320, 224
-HORIZON = 96  # first ground scanline
+SCREEN_W, SCREEN_H = 320, 240  # PAL H40/V30
 
 
 def make_palette(colors):
@@ -32,54 +35,169 @@ def make_palette(colors):
 
 
 def gen_ground():
-    # Palette layout (PAL0):
-    #  0 backdrop (black)         1..4 sky gradient blues
-    #  5 checker light            6 checker dark
-    #  7 horizon haze
+    """320x352 BG_B board with vertical pitch headroom, SH2 / Burning Force style.
+
+    - Width matches the screen (320 px).  Height is 224 + 2*PITCH_RANGE so
+      V-scroll can move the horizon without wrapping; neutral pitch shows
+      rows [PAD_TOP .. PAD_TOP+224).
+    - Per-line H-scroll skews the checker (perspective table); forward motion
+      is pure palette animation on the static plane.
+    - Lateral checker uses world-space parity (floor((x-cx)*z/(P*CELL)) +
+      floor(z/CELL)) so diagonals converge cleanly; rows where w(y) < 4 px are
+      filled with horizon haze instead of 1-px moire.
+
+    Palette layout (PAL0), must match src/engine/ground.c:
+      0      backdrop (black)
+      1..4   sky bands (teal -> cyan -> cream)
+      5      mountain green (arcade)
+      6      horizon haze (cream)
+      7..14  checker phase entries (SH2 blues; rotated at runtime)
+      15     white (HUD text)
+    """
+    HORIZON_ONSCREEN = 96
+    PITCH_RANGE = 64
+    PAD_TOP = PITCH_RANGE
+    PAD_BOTTOM = PITCH_RANGE
+    IMG_W = 320
+    IMG_H = 224 + PAD_TOP + PAD_BOTTOM      # 352
+    HORIZON = HORIZON_ONSCREEN + PAD_TOP    # 160 inside the tall image
+    PHASES = 4          # forward-motion phase bands per checker cell
+    CHECKER_BASE = 7    # first checker palette index
+
+    # SH2-style palette: teal/cyan sky, cream horizon, green mountains,
+    # two-tone blue checker.  Indices 7..14 are distinct for rescomp but
+    # ground.c overwrites them at runtime with the light/dark pair.
+    checker_shades = [
+        (88, 152, 216),   # 7  light blue (phase 0)
+        (96, 160, 224),   # 8  light
+        (80, 144, 208),   # 9  light
+        (104, 168, 232),  # 10 light
+        (32, 64, 144),    # 11 dark blue (phase 0)
+        (40, 72, 152),    # 12 dark
+        (24, 56, 136),    # 13 dark
+        (48, 80, 160),    # 14 dark
+    ]
     colors = [
         (0, 0, 0),
-        (32, 64, 160),    # sky deep
-        (48, 96, 192),
-        (80, 128, 224),
-        (128, 176, 240),  # sky near horizon
-        (96, 192, 64),    # checker light green
-        (32, 112, 32),    # checker dark green
-        (176, 224, 240),  # horizon haze
+        (16, 80, 112),    # 1 sky deep teal
+        (32, 144, 176),   # 2 sky mid cyan
+        (64, 192, 208),   # 3 sky bright cyan
+        (240, 208, 96),   # 4 sky cream (near horizon)
+        (49, 222, 32),    # 5 mountain green (arcade gfx1 pal code 8)
+        (248, 236, 176),  # 6 horizon haze
+    ] + checker_shades + [
+        (255, 255, 255),  # HUD text white
     ]
-    img = Image.new("P", (SCREEN_W, SCREEN_H), 0)
+    img = Image.new("P", (IMG_W, IMG_H), 0)
     img.putpalette(make_palette(colors))
     px = img.load()
 
-    # Sky: 4 horizontal bands.
-    band_h = HORIZON // 4
-    for y in range(HORIZON):
-        idx = 1 + min(3, y // band_h)
-        for x in range(SCREEN_W):
-            px[x, y] = idx
+    # Sky: arcade-style bands — teal/cyan gradient, cream at horizon.
+    sky_bands = (
+        (30, 1),   # deep teal
+        (35, 1),   # deep teal
+        (40, 2),   # mid cyan
+        (35, 3),   # bright cyan
+        (20, 4),   # cream near horizon
+    )  # sums to HORIZON (160)
+    y = 0
+    for h, idx in sky_bands:
+        for yy in range(y, y + h):
+            for x in range(IMG_W):
+                px[x, yy] = idx
+        y += h
 
-    # Thin haze line right at the horizon.
-    for x in range(SCREEN_W):
-        px[x, HORIZON] = 7
-        px[x, HORIZON + 1] = 7
+    # Thin haze line right at the horizon (before mountains overwrite peaks).
+    for x in range(IMG_W):
+        px[x, HORIZON] = 6
+        px[x, HORIZON + 1] = 6
 
-    # Ground: true perspective projection of an infinite checkerboard.
-    #   z(y) = F / (y - HORIZON), worldX = (x - cx) * z / P
-    F = 9000.0          # depth scale
-    P = 160.0           # projection scale
-    CELL = 96.0         # checker cell size in world units
-    cx = SCREEN_W / 2.0
-    for y in range(HORIZON + 2, SCREEN_H):
-        z = F / (y - HORIZON)
-        for x in range(SCREEN_W):
-            wx = (x - cx) * z / P
-            parity = (math.floor(wx / CELL) + math.floor(z / CELL)) & 1
-            px[x, y] = 5 if parity else 6
+    # Ground: perspective checkerboard with phase-band colour indices.
+    #
+    # Depth and projection must match src/engine/world.h (Z_NEAR = 256) so the
+    # floor grid and sprite projection share one vanishing point.  F is chosen
+    # so z = Z_NEAR at the player contact line (GROUND_HORIZON + GROUND_DEPTH
+    # on screen, with neutral pitch and V-scroll = PAD_TOP).
+    #
+    # Checker parity is evaluated in world space — do NOT quantise a per-line
+    # cell width to integer pixels.  That was the main horizon warp: near the
+    # vanishing point w(y) falls to 1 px, so (x-cx)//w moire-shimmers and the
+    # diagonals no longer meet cleanly.  SH2 hides the last few lines behind
+    # horizon haze; we do the same when w(y) would drop below MIN_CELL_W.
+    Z_NEAR = 256.0
+    GROUND_DEPTH = 110.0
+    GROUND_HORIZON_SCREEN = float(HORIZON_ONSCREEN)
+    VSCROLL_NEUTRAL = float(PAD_TOP)
+    contact_plane_y = GROUND_HORIZON_SCREEN + GROUND_DEPTH + VSCROLL_NEUTRAL
+    F = Z_NEAR * (contact_plane_y - HORIZON)
+    P = Z_NEAR
+    CELL = 32.0         # world-space checker period (matches SH2-ish density)
+    MIN_CELL_W = 4      # below this, rows are haze-only (SH2 horizon mask)
+    cx = IMG_W // 2
+    for y in range(HORIZON + 2, IMG_H):
+        d = float(y - HORIZON)
+        z = F / d
+        w = CELL * P / z
+        if w < MIN_CELL_W:
+            for x in range(IMG_W):
+                px[x, y] = 6
+            continue
+
+        sub = int(math.floor(z * PHASES / CELL)) % PHASES
+        for x in range(IMG_W):
+            cell_x = int(math.floor((x - cx) * z / (P * CELL)))
+            cell_z = int(math.floor(z / CELL))
+            rel = ((cell_x + cell_z) % 2 * PHASES + sub) % (2 * PHASES)
+            px[x, y] = CHECKER_BASE + rel
+
+    # Mountain strip: arcade gfx1 row-32 silhouette, solid green on the MD.
+    MOUNTAIN = 5
+    MOUNTAIN_SCALE = 2
+    try:
+        mountain_rgb = extract_mountain_strip()
+        mpx = mountain_rgb.load()
+        strip_h = mountain_rgb.size[1]
+        for sx in range(min(IMG_W, mountain_rgb.size[0])):
+            top = strip_h
+            for sy in range(strip_h):
+                r, g, b = mpx[sx, sy]
+                if g > 80 and g > r + 20:
+                    top = min(top, sy)
+            if top >= strip_h:
+                continue
+            height = max(1, (strip_h - top) * MOUNTAIN_SCALE)
+            for dy in range(height):
+                py = HORIZON - dy
+                if py >= 0:
+                    px[sx, py] = MOUNTAIN
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"warn: arcade mountains unavailable ({exc}), using procedural fallback")
+        for x in range(IMG_W):
+            h = int(
+                6
+                + 5 * math.sin(x * 0.047)
+                + 4 * math.sin(x * 0.113 + 1.2)
+                + 3 * math.sin(x * 0.271 + 2.4)
+                + 2 * math.sin(x * 0.053 + 0.7)
+            )
+            h = max(4, min(18, h))
+            for dy in range(h):
+                py = HORIZON - dy
+                if py >= 0:
+                    px[x, py] = MOUNTAIN
 
     img.save(os.path.join(SPRITES, "ground.png"))
     print("wrote ground.png")
 
 
 def gen_player():
+    """64x96 player sprite — must match resources.res (8x12 tiles) and main.c."""
+    try:
+        rip_player()
+        return
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"warn: X68000 player rip unavailable ({exc}), using procedural fallback")
+
     # Palette layout (PAL1): 0 transparent, then character colours.
     colors = [
         (255, 0, 255),    # 0 transparent (magenta key, index 0 unused anyway)
@@ -94,35 +212,31 @@ def gen_player():
         (244, 224, 96),   # 9 hair blond
         (255, 255, 255),  # 10 highlight
     ]
-    W, H = 32, 48
+    W, H = 64, 96
     img = Image.new("P", (W, H), 0)
     img.putpalette(make_palette(colors))
-    d = ImageDraw.Draw(img)
+    small = Image.new("P", (32, 48), 0)
+    small.putpalette(make_palette(colors))
+    d = ImageDraw.Draw(small)
 
     # Simple original "flying man with cannon" placeholder, rear 3/4 view.
-    # Head
     d.ellipse([12, 2, 20, 10], fill=1, outline=2)
-    d.rectangle([12, 2, 20, 5], fill=9)           # hair
-    # Torso (jacket)
+    d.rectangle([12, 2, 20, 5], fill=9)
     d.polygon([(10, 10), (22, 10), (24, 26), (8, 26)], fill=3, outline=2)
     d.line([(16, 10), (16, 26)], fill=4)
-    # Arms: left arm down, right arm holding cannon forward
     d.polygon([(8, 11), (4, 22), (7, 24), (11, 14)], fill=3, outline=2)
     d.polygon([(22, 11), (28, 16), (26, 20), (20, 15)], fill=4, outline=2)
-    # Cannon under right arm
     d.rectangle([24, 14, 30, 30], fill=7, outline=8)
     d.rectangle([26, 12, 28, 14], fill=8)
-    # Legs (flying pose, trailing)
     d.polygon([(10, 26), (15, 26), (13, 44), (8, 42)], fill=5, outline=2)
     d.polygon([(17, 26), (22, 26), (23, 45), (18, 46)], fill=6, outline=2)
-    # Boots
     d.rectangle([8, 42, 14, 46], fill=2)
     d.rectangle([18, 44, 24, 47], fill=2)
-    # Visor highlight
     d.point((18, 6), fill=10)
 
+    img.paste(small.resize((W, H), Image.NEAREST), (0, 0))
     img.save(os.path.join(SPRITES, "player.png"))
-    print("wrote player.png")
+    print(f"wrote player.png ({W}x{H})")
 
 
 # Shared palette for enemy + shot sprites (PAL2 at runtime).

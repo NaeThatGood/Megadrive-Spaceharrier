@@ -7,8 +7,8 @@ per scale step. Every frame sits on a 64x64 canvas, anchored bottom-centre,
 so the engine can position all sizes identically. rescomp trims empty 8x8
 tiles per frame, so small frames cost little ROM despite the fixed canvas.
 
-Scale steps must match SIZE_TO_FRAME() in render_stored.c:
-  size = 8 + 4 * i  for i in 0..14  (8 px .. 64 px, 15 frames)
+Scale steps must match FRAME_SIZES[] in render_stored.c:
+  round(8 + 56 * i / 24)  for i in 0..24  (25 frames, 8..64 px)
 """
 
 import os
@@ -19,7 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPRITES = os.path.join(ROOT, "res", "sprites")
 
 CANVAS = 64
-SIZES = [8 + 4 * i for i in range(15)]   # 8..64 in 4px steps
+FRAME_COUNT = 25
+SIZES = [round(8 + 56 * i / (FRAME_COUNT - 1)) for i in range(FRAME_COUNT)]
 
 
 def main():
