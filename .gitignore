@@ -13,3 +13,6 @@ tools/venv/
 # Local video captures etc.
 Video/
 src/rom_header.c
+
+# Local arcade ROM dumps for asset ripping (not redistributed)
+SH MAME ROM/
