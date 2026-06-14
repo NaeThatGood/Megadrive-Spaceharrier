@@ -28,12 +28,15 @@
 #define ENEMY_SPEED_MAX      200
 #define ENEMY_SPEED_STEP     10
 #define MAX_TREES            4
+#define TREE_VISIBLE_COUNT   3
+#define TREE_NEAR_SPRITES    1
+#define TREE_FAR_SPRITES     (TREE_VISIBLE_COUNT - TREE_NEAR_SPRITES)
 #define TREE_FRAME_COUNT     25
 #define TREE_FRAME_CANVAS_W  64
-#define TREE_FRAME_CANVAS_H  240
+#define TREE_NEAR_CANVAS_H   216
+#define TREE_FAR_CANVAS_H    96
 #define TREE_Z_SPACING       ((WORLD_Z_FAR - WORLD_Z_NEAR) / MAX_TREES)
 #define TREE_DEPTH           200
-#define TREE_ALLOC_MAX       3
 #define PLAYER_DEPTH         0
 
 static Sprite* player;
@@ -48,11 +51,13 @@ typedef struct
 {
     s16     wx;
     u16     z;
-    u8      sizeIdx;
-    Sprite* spr;
 } WTree;
 
 static WTree trees[MAX_TREES];
+static Sprite* treeNearSprs[TREE_NEAR_SPRITES];
+static Sprite* treeFarSprs[TREE_FAR_SPRITES];
+static u8 treeNearFrameIdx[TREE_NEAR_SPRITES];
+static u8 treeFarFrameIdx[TREE_FAR_SPRITES];
 
 static const Renderer* renderer;
 static u16 hits;
@@ -130,55 +135,125 @@ static void resetTree(WTree* t, u8 slot, u16 z)
 {
     t->wx = treeLane(slot);
     t->z = z;
-    t->sizeIdx = 0xFF;
-    if (t->spr)
-    {
-        SPR_setFrame(t->spr, 0);
-        SPR_setVisibility(t->spr, HIDDEN);
-    }
 }
 
 static void initTrees(void)
 {
     PAL_setPalette(PAL3, spr_tree_scaled.palette->data, CPU);
 
-    for (u8 i = 0; i < MAX_TREES; i++)
+    for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
     {
-        trees[i].spr = (i < TREE_ALLOC_MAX)
-            ? SPR_addSprite(&spr_tree_scaled, -128, -128,
-                            TILE_ATTR(PAL3, 0, FALSE, FALSE))
-            : NULL;
-        if (trees[i].spr) SPR_setDepth(trees[i].spr, TREE_DEPTH);
-        resetTree(&trees[i], i, WORLD_Z_FAR - (u16) i * TREE_Z_SPACING);
+        treeNearSprs[i] = SPR_addSprite(&spr_tree_scaled, -128, -128,
+                                        TILE_ATTR(PAL3, 0, FALSE, FALSE));
+        treeNearFrameIdx[i] = 0xFF;
+        if (treeNearSprs[i])
+        {
+            SPR_setDepth(treeNearSprs[i], TREE_DEPTH);
+            SPR_setVisibility(treeNearSprs[i], HIDDEN);
+        }
     }
+
+    for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
+    {
+        treeFarSprs[i] = SPR_addSprite(&spr_tree_scaled_far, -128, -128,
+                                       TILE_ATTR(PAL3, 0, FALSE, FALSE));
+        treeFarFrameIdx[i] = 0xFF;
+        if (treeFarSprs[i])
+        {
+            SPR_setDepth(treeFarSprs[i], TREE_DEPTH);
+            SPR_setVisibility(treeFarSprs[i], HIDDEN);
+        }
+    }
+
+    for (u8 i = 0; i < MAX_TREES; i++)
+        resetTree(&trees[i], i, WORLD_Z_FAR - (u16) i * TREE_Z_SPACING);
 }
 
 static void updateTrees(void)
 {
     const s16 pwx = playerWorldX();
+    u8 sorted[MAX_TREES];
+    u8 visible[TREE_VISIBLE_COUNT];
+    u8 visibleCount = 0;
 
     for (u8 i = 0; i < MAX_TREES; i++)
     {
         WTree* t = &trees[i];
-        if (!t->spr) continue;
-
         if (t->z <= WORLD_Z_NEAR + GROUND_FORWARD_SPEED)
             resetTree(t, i, WORLD_Z_FAR);
         else
             t->z -= GROUND_FORWARD_SPEED;
+        sorted[i] = i;
+    }
 
-        const u8 frame = treeSizeToFrame(WORLD_sizePx(t->z));
-        if (frame != t->sizeIdx)
+    // Render the closest logical trees with a small fixed sprite pool:
+    // one full-height near sprite plus smaller far sprites for the rest.
+    for (u8 i = 1; i < MAX_TREES; i++)
+    {
+        const u8 idx = sorted[i];
+        u8 j = i;
+        while (j > 0 && trees[sorted[j - 1]].z > trees[idx].z)
         {
-            t->sizeIdx = frame;
-            SPR_setFrame(t->spr, frame);
+            sorted[j] = sorted[j - 1];
+            j--;
+        }
+        sorted[j] = idx;
+    }
+
+    for (u8 i = 0; i < MAX_TREES && visibleCount < TREE_VISIBLE_COUNT; i++)
+    {
+        const WTree* t = &trees[sorted[i]];
+        if (WORLD_sizePx(t->z) <= TREE_FRAME_SIZES[TREE_FRAME_COUNT - 1])
+            visible[visibleCount++] = sorted[i];
+    }
+
+    for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
+    {
+        Sprite* spr = treeNearSprs[i];
+        if (!spr) continue;
+        if (i >= visibleCount)
+        {
+            SPR_setVisibility(spr, HIDDEN);
+            continue;
         }
 
-        SPR_setPosition(t->spr,
+        const WTree* t = &trees[visible[i]];
+        const u8 frame = treeSizeToFrame(WORLD_sizePx(t->z));
+        if (frame != treeNearFrameIdx[i])
+        {
+            treeNearFrameIdx[i] = frame;
+            SPR_setFrame(spr, frame);
+        }
+        SPR_setPosition(spr,
                         WORLD_screenX(t->wx - pwx, t->z) - (TREE_FRAME_CANVAS_W / 2),
                         WORLD_screenYBottom(0, t->z) + GROUND_VISIBLE_HORIZON_PAD
-                            - TREE_FRAME_CANVAS_H);
-        SPR_setVisibility(t->spr, VISIBLE);
+                            - TREE_NEAR_CANVAS_H);
+        SPR_setVisibility(spr, VISIBLE);
+    }
+
+    for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
+    {
+        Sprite* spr = treeFarSprs[i];
+        const u8 visibleIdx = TREE_NEAR_SPRITES + i;
+        if (!spr) continue;
+        if (visibleIdx >= visibleCount)
+        {
+            SPR_setVisibility(spr, HIDDEN);
+            continue;
+        }
+
+        const WTree* t = &trees[visible[visibleIdx]];
+        const u8 frame = treeSizeToFrame(WORLD_sizePx(t->z));
+        if (frame != treeFarFrameIdx[i])
+        {
+            treeFarFrameIdx[i] = frame;
+            SPR_setFrame(spr, frame);
+        }
+        SPR_setPosition(spr,
+                        WORLD_screenX(t->wx - pwx, t->z) - (TREE_FRAME_CANVAS_W / 2),
+                        WORLD_screenYBottom(0, t->z) + GROUND_VISIBLE_HORIZON_PAD
+                            - TREE_FAR_CANVAS_H);
+        SPR_setVisibility(spr, VISIBLE);
     }
 }
 

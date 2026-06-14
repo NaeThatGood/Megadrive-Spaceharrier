@@ -10,6 +10,7 @@ extern const SpriteDefinition spr_player;
 extern const SpriteDefinition spr_enemy16;
 extern const SpriteDefinition spr_enemy_scaled;
 extern const SpriteDefinition spr_tree_scaled;
+extern const SpriteDefinition spr_tree_scaled_far;
 extern const SpriteDefinition spr_shot;
 extern const SpriteDefinition spr_quad32;
 
