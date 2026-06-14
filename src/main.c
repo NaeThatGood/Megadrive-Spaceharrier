@@ -20,9 +20,7 @@
 #define HURT_FLASH_FRAMES  16
 #define HURT_FLASH_PHASE   4
 #define PLAYER_SPEED_DEFAULT  7
-#define PLAYER_SPEED_MIN      2
-#define PLAYER_SPEED_MAX      19
-#define PLAYER_SPEED_STEP     2
+#define PLAYER_SPEED_STEP_COUNT  9
 #define ENEMY_SPEED_DEFAULT  50
 #define ENEMY_SPEED_MIN      10
 #define ENEMY_SPEED_MAX      200
@@ -64,11 +62,17 @@ static u16 hits;
 static u16 spawnTimer;
 static u16 hurtFlash;
 static u16 playerSpeed;
+static u8 playerSpeedStep;
 static u16 enemySpeedPct;
 static u16 prevJoy;
 static bool paused;
 
 // --- Helpers ----------------------------------------------------------------
+
+static const u16 PLAYER_SPEED_PCTS[PLAYER_SPEED_STEP_COUNT] =
+{
+    100, 125, 150, 175, 200, 0, 25, 50, 75
+};
 
 static s16 playerWorldX(void)
 {
@@ -95,6 +99,13 @@ static u16 enemyStepVz(const WObj* o)
 {
     const u16 vz = (u16) ((((u32) o->vz * enemySpeedPct) + 50) / 100);
     return (vz == 0) ? 1 : vz;
+}
+
+static void setPlayerSpeedStep(u8 step)
+{
+    playerSpeedStep = step % PLAYER_SPEED_STEP_COUNT;
+    playerSpeed = (u16) ((((u32) PLAYER_SPEED_DEFAULT *
+                           PLAYER_SPEED_PCTS[playerSpeedStep]) + 50) / 100);
 }
 
 // --- Trees -------------------------------------------------------------------
@@ -447,10 +458,10 @@ static void handleInput(void)
     if ((pressed & BUTTON_B) && enemySpeedPct < ENEMY_SPEED_MAX)
         enemySpeedPct += ENEMY_SPEED_STEP;
 
-    if ((pressed & BUTTON_Y) && playerSpeed < PLAYER_SPEED_MAX)
-        playerSpeed += PLAYER_SPEED_STEP;
-    if ((pressed & BUTTON_Z) && playerSpeed > PLAYER_SPEED_MIN)
-        playerSpeed -= PLAYER_SPEED_STEP;
+    if (pressed & BUTTON_Y)
+        sky_setEnabled(!sky_isEnabled());
+    if (pressed & BUTTON_Z)
+        setPlayerSpeedStep(playerSpeedStep + 1);
 
     if (pressed & BUTTON_X)
         fireShot();
@@ -491,7 +502,7 @@ int main(bool hardReset)
     PAL_setPalette(PAL1, spr_player.palette->data, CPU);
     playerX = PLAYER_CENTER_X;
     playerY = playerMaxY - 8;
-    playerSpeed = PLAYER_SPEED_DEFAULT;
+    setPlayerSpeedStep(0);
     enemySpeedPct = ENEMY_SPEED_DEFAULT;
     player = SPR_addSprite(&spr_player, playerX, playerY,
                            TILE_ATTR(PAL1, 0, FALSE, FALSE));

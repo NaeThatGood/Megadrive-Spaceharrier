@@ -25,6 +25,8 @@ typedef struct
 extern const SkyKeyframe SKY_KEYFRAMES[SKY_KEYFRAME_COUNT];
 
 void sky_init(void);
+void sky_setEnabled(bool enabled);
+bool sky_isEnabled(void);
 void sky_setHorizon(s16 y);
 void sky_vblank(void);
 

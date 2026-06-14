@@ -34,7 +34,8 @@ See the companion documents:
 | A / B | Slow / speed up enemy scaling |
 | C | Switch between STORED and RUNTIME scaling modes |
 | X | Fire |
-| Y / Z | Speed up / slow down Harrier movement |
+| Y | Toggle graduated horizon / sky scanline effect |
+| Z | Cycle Harrier movement speed in 25% steps |
 | START | Pause / resume |
 
 The debug HUD (top of screen) shows the active mode, live object count,

@@ -15,6 +15,7 @@ static const u16* skyReadPtr;
 static vu16 skyLinesLeft;       // scanlines the HINT should still fire this frame
 static vu16 skySkipLines;       // flat top lines before the transition band
 static vu16 skyResetLine;       // restore backdrop colour just below horizon
+static bool enabled;
 
 static u16 rgbToVdp(u8 r, u8 g, u8 b)
 {
@@ -93,10 +94,23 @@ void sky_init(void)
     skyLinesLeft = 1;
     skySkipLines = 0;
     skyResetLine = FALSE;
+    enabled = TRUE;
 
     SYS_setHIntCallback(sky_hint);
     VDP_setHIntCounter(0);
     VDP_setHInterrupt(TRUE);
+}
+
+void sky_setEnabled(bool value)
+{
+    enabled = value;
+    if (!enabled)
+        VDP_setHInterrupt(FALSE);
+}
+
+bool sky_isEnabled(void)
+{
+    return enabled;
 }
 
 void sky_setHorizon(s16 y)
@@ -108,6 +122,14 @@ void sky_setHorizon(s16 y)
 
 void sky_vblank(void)
 {
+    if (!enabled)
+    {
+        VDP_setHInterrupt(FALSE);
+        *((vu32*) VDP_CTRL_PORT) = 0xC0000000UL | ((u32) (SKY_CRAM_INDEX * 2) << 16);
+        *((vu16*) VDP_DATA_PORT) = ramp[0];
+        return;
+    }
+
     s16 h = horizonY;
     if (h < 0) h = 0;
     if (h > SKY_H0) h = SKY_H0;
