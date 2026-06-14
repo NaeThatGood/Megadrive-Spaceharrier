@@ -32,8 +32,10 @@ See the companion documents:
 | Input | Action |
 | --- | --- |
 | D-pad | Move player |
-| A / B | Fire |
+| A / B | Slow / speed up enemy scaling |
 | C | Switch between STORED and RUNTIME scaling modes |
+| X | Fire |
+| Y / Z | Speed up / slow down Harrier movement |
 | START | Pause / resume |
 
 The debug HUD (top of screen) shows the active mode, live object count,

@@ -3,20 +3,22 @@
 #include "../../engine/world.h"
 
 // Stored-frame renderer.
-// 25 pre-rendered scale steps (8..64 px, ~2.3 px apart) live in ROM as
+// 50 pre-rendered scale steps (8..64 px, ~1.1 px apart) live in ROM as
 // frames of one sprite sheet, every frame on a 64x64 canvas anchored
-// bottom-centre (see tools/gen_scale_frames.py). One step per 25 Hz tick
-// during mid-range approach; the sprite engine streams the frame's tiles
-// to VRAM only when the frame index changes.
+// bottom-centre (see tools/gen_scale_frames.py). The 50 Hz game loop maps
+// projected size to the nearest step; the sprite engine streams the frame's
+// tiles to VRAM only when the frame index changes.
 
-#define FRAME_COUNT     25
+#define FRAME_COUNT     50
 #define FRAME_CANVAS    64
 
 static const u8 FRAME_SIZES[FRAME_COUNT] =
 {
-     8, 10, 13, 15, 17, 19, 22, 24, 27, 29,
-    31, 34, 36, 38, 41, 43, 45, 48, 50, 52,
-    55, 57, 59, 61, 64
+     8,  9, 10, 11, 13, 14, 15, 16, 17, 18,
+    19, 21, 22, 23, 24, 25, 26, 27, 29, 30,
+    31, 32, 33, 34, 35, 37, 38, 39, 40, 41,
+    42, 43, 45, 46, 47, 48, 49, 50, 51, 53,
+    54, 55, 56, 57, 58, 59, 61, 62, 63, 64
 };
 
 static u8 sizeToFrame(u16 sizePx)
@@ -38,7 +40,7 @@ static u8 sizeToFrame(u16 sizePx)
 
 static void st_init(void)
 {
-    PAL_setPalette(PAL2, spr_enemy_scaled.palette->data, CPU);
+    PAL_setPalette(PAL2, spr_enemy_scaled.palette->data, DMA_QUEUE);
 }
 
 static void st_spawn(WObj* o)

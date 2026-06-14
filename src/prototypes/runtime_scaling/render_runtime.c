@@ -174,7 +174,7 @@ static void rescaleObject(WObj* o, u8 size)
 
 static void rt_init(void)
 {
-    PAL_setPalette(PAL2, spr_enemy_scaled.palette->data, CPU);
+    PAL_setPalette(PAL2, spr_enemy_scaled.palette->data, DMA_QUEUE);
 
     // Slots sit immediately after the ground tileset so DMA never clobbers
     // floor tiles. Boot calls SPR_initEx(RUNTIME_spriteVramBudget()) so the

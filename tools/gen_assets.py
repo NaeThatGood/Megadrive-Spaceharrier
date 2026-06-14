@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Generate placeholder / ripped art for the Space Harrier-style prototype.
 
-Ground plane sky + checkerboard are procedural. Mountain horizon is ripped
-from the arcade gfx1 tile ROMs when SH MAME ROM/ is present (see
-rip_mountains_arcade.py). Outputs indexed PNGs for SGDK rescomp.
+Ground plane checkerboard is procedural. Outputs indexed PNGs for SGDK rescomp.
 
 Outputs:
-  res/sprites/ground.png   320x352 sky + perspective checkerboard plane (PAL0)
+  res/sprites/ground.png   384x352 perspective checkerboard plane (PAL0)
   res/sprites/player.png   32x48 player character sprite sheet, 1 frame (PAL1)
 """
 
@@ -19,7 +17,6 @@ from PIL import Image, ImageDraw
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPRITES = os.path.join(ROOT, "res", "sprites")
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-from rip_mountains_arcade import extract_mountain_strip
 from rip_player_x68 import rip as rip_player
 
 SCREEN_W, SCREEN_H = 320, 240  # PAL H40/V30
@@ -35,10 +32,11 @@ def make_palette(colors):
 
 
 def gen_ground():
-    """320x352 BG_B board with vertical pitch headroom, SH2 / Burning Force style.
+    """384x352 BG_B board with vertical pitch headroom, SH2 / Burning Force style.
 
-    - Width matches the screen (320 px).  Height is 224 + 2*PITCH_RANGE so
-      V-scroll can move the horizon without wrapping; neutral pitch shows
+    - Width gives a 32 px side margin around the centered 320 px viewport.
+      Height is 224 + 2*PITCH_RANGE so V-scroll can move the horizon without
+      wrapping; neutral pitch shows
       rows [PAD_TOP .. PAD_TOP+224).
     - Per-line H-scroll skews the checker (perspective table); forward motion
       is pure palette animation on the static plane.
@@ -47,10 +45,9 @@ def gen_ground():
       filled with horizon haze instead of 1-px moire.
 
     Palette layout (PAL0), must match src/engine/ground.c:
-      0      backdrop (black)
-      1..4   sky bands (teal -> cyan -> cream)
-      5      mountain green (arcade)
-      6      horizon haze (cream)
+      0      transparent/backdrop
+      1..5   spare colours
+      6      spare horizon colour
       7..14  checker phase entries (SH2 blues; rotated at runtime)
       15     white (HUD text)
     """
@@ -58,15 +55,14 @@ def gen_ground():
     PITCH_RANGE = 64
     PAD_TOP = PITCH_RANGE
     PAD_BOTTOM = PITCH_RANGE
-    IMG_W = 320
+    IMG_W = 384
     IMG_H = 224 + PAD_TOP + PAD_BOTTOM      # 352
     HORIZON = HORIZON_ONSCREEN + PAD_TOP    # 160 inside the tall image
     PHASES = 4          # forward-motion phase bands per checker cell
     CHECKER_BASE = 7    # first checker palette index
 
-    # SH2-style palette: teal/cyan sky, cream horizon, green mountains,
-    # two-tone blue checker.  Indices 7..14 are distinct for rescomp but
-    # ground.c overwrites them at runtime with the light/dark pair.
+    # SH2-style palette: two-tone blue checker. Indices 7..14 are distinct for
+    # rescomp but ground.c overwrites them at runtime with the light/dark pair.
     checker_shades = [
         (88, 152, 216),   # 7  light blue (phase 0)
         (96, 160, 224),   # 8  light
@@ -78,13 +74,13 @@ def gen_ground():
         (48, 80, 160),    # 14 dark
     ]
     colors = [
-        (0, 0, 0),
-        (16, 80, 112),    # 1 sky deep teal
-        (32, 144, 176),   # 2 sky mid cyan
-        (64, 192, 208),   # 3 sky bright cyan
-        (240, 208, 96),   # 4 sky cream (near horizon)
-        (49, 222, 32),    # 5 mountain green (arcade gfx1 pal code 8)
-        (248, 236, 176),  # 6 horizon haze
+        (0, 0, 0),        # 0 transparent/backdrop
+        (0, 0, 0),        # 1 spare
+        (0, 0, 0),        # 2 spare
+        (0, 0, 0),        # 3 spare
+        (0, 0, 0),        # 4 spare
+        (248, 236, 176),  # 5 spare horizon colour
+        (248, 236, 176),  # 6 spare horizon colour
     ] + checker_shades + [
         (255, 255, 255),  # HUD text white
     ]
@@ -92,25 +88,8 @@ def gen_ground():
     img.putpalette(make_palette(colors))
     px = img.load()
 
-    # Sky: arcade-style bands — teal/cyan gradient, cream at horizon.
-    sky_bands = (
-        (30, 1),   # deep teal
-        (35, 1),   # deep teal
-        (40, 2),   # mid cyan
-        (35, 3),   # bright cyan
-        (20, 4),   # cream near horizon
-    )  # sums to HORIZON (160)
-    y = 0
-    for h, idx in sky_bands:
-        for yy in range(y, y + h):
-            for x in range(IMG_W):
-                px[x, yy] = idx
-        y += h
-
-    # Thin haze line right at the horizon (before mountains overwrite peaks).
-    for x in range(IMG_W):
-        px[x, HORIZON] = 6
-        px[x, HORIZON + 1] = 6
+    # Rows above the horizon are intentionally left as index 0 so the ground
+    # image has no baked sky while preserving the same pitch-scroll geometry.
 
     # Ground: perspective checkerboard with phase-band colour indices.
     #
@@ -122,8 +101,8 @@ def gen_ground():
     # Checker parity is evaluated in world space — do NOT quantise a per-line
     # cell width to integer pixels.  That was the main horizon warp: near the
     # vanishing point w(y) falls to 1 px, so (x-cx)//w moire-shimmers and the
-    # diagonals no longer meet cleanly.  SH2 hides the last few lines behind
-    # horizon haze; we do the same when w(y) would drop below MIN_CELL_W.
+    # diagonals no longer meet cleanly. Rows where that would happen stay
+    # transparent/backdrop instead of drawing unstable checker cells.
     Z_NEAR = 256.0
     GROUND_DEPTH = 110.0
     GROUND_HORIZON_SCREEN = float(HORIZON_ONSCREEN)
@@ -139,8 +118,6 @@ def gen_ground():
         z = F / d
         w = CELL * P / z
         if w < MIN_CELL_W:
-            for x in range(IMG_W):
-                px[x, y] = 6
             continue
 
         sub = int(math.floor(z * PHASES / CELL)) % PHASES
@@ -149,42 +126,6 @@ def gen_ground():
             cell_z = int(math.floor(z / CELL))
             rel = ((cell_x + cell_z) % 2 * PHASES + sub) % (2 * PHASES)
             px[x, y] = CHECKER_BASE + rel
-
-    # Mountain strip: arcade gfx1 row-32 silhouette, solid green on the MD.
-    MOUNTAIN = 5
-    MOUNTAIN_SCALE = 2
-    try:
-        mountain_rgb = extract_mountain_strip()
-        mpx = mountain_rgb.load()
-        strip_h = mountain_rgb.size[1]
-        for sx in range(min(IMG_W, mountain_rgb.size[0])):
-            top = strip_h
-            for sy in range(strip_h):
-                r, g, b = mpx[sx, sy]
-                if g > 80 and g > r + 20:
-                    top = min(top, sy)
-            if top >= strip_h:
-                continue
-            height = max(1, (strip_h - top) * MOUNTAIN_SCALE)
-            for dy in range(height):
-                py = HORIZON - dy
-                if py >= 0:
-                    px[sx, py] = MOUNTAIN
-    except (FileNotFoundError, RuntimeError) as exc:
-        print(f"warn: arcade mountains unavailable ({exc}), using procedural fallback")
-        for x in range(IMG_W):
-            h = int(
-                6
-                + 5 * math.sin(x * 0.047)
-                + 4 * math.sin(x * 0.113 + 1.2)
-                + 3 * math.sin(x * 0.271 + 2.4)
-                + 2 * math.sin(x * 0.053 + 0.7)
-            )
-            h = max(4, min(18, h))
-            for dy in range(h):
-                py = HORIZON - dy
-                if py >= 0:
-                    px[x, py] = MOUNTAIN
 
     img.save(os.path.join(SPRITES, "ground.png"))
     print("wrote ground.png")

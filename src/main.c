@@ -3,6 +3,7 @@
 #include "engine/ground.h"
 #include "engine/world.h"
 #include "engine/hud.h"
+#include "engine/sky.h"
 
 // --- Player -----------------------------------------------------------------
 
@@ -15,8 +16,17 @@
 #define PLAYER_FEET_Y   (PLAYER_H - 20)   // matches playerWorldY() reference
 #define PLAYER_GROUND_SINK  8             // feet dip into checker when low
 
-#define PLAYER_SPEED    6
 #define PLAYER_CENTER_X ((320 - PLAYER_W) / 2)
+#define HURT_FLASH_FRAMES  32
+#define HURT_FLASH_PHASE   8
+#define PLAYER_SPEED_DEFAULT  3
+#define PLAYER_SPEED_MIN      1
+#define PLAYER_SPEED_MAX      8
+#define PLAYER_SPEED_STEP     1
+#define ENEMY_SPEED_DEFAULT  50
+#define ENEMY_SPEED_MIN      10
+#define ENEMY_SPEED_MAX      200
+#define ENEMY_SPEED_STEP     10
 
 static Sprite* player;
 static s16 playerX;
@@ -30,6 +40,8 @@ static const Renderer* renderer;
 static u16 hits;
 static u16 spawnTimer;
 static u16 hurtFlash;
+static u16 playerSpeed;
+static u16 enemySpeedPct;
 static u16 prevJoy;
 static bool paused;
 
@@ -54,6 +66,12 @@ static u16 countObjects(void)
     for (u16 i = 0; i < MAX_OBJECTS; i++)
         if (objects[i].active) n++;
     return n;
+}
+
+static u16 enemyStepVz(const WObj* o)
+{
+    const u16 vz = (u16) ((((u32) o->vz * enemySpeedPct) + 50) / 100);
+    return (vz == 0) ? 1 : vz;
 }
 
 // --- Objects ----------------------------------------------------------------
@@ -97,15 +115,17 @@ static void updateObjects(void)
 
         o->wx += o->vx;
 
-        if (o->z <= WORLD_Z_NEAR + o->vz)
+        const u16 stepVz = enemyStepVz(o);
+
+        if (o->z <= WORLD_Z_NEAR + stepVz)
         {
             // Reached the player plane: collision check, then leave
             if (abs(o->wx - pwx) < 80 && abs(o->wy - pwy) < 96)
-                hurtFlash = 16;
+                hurtFlash = HURT_FLASH_FRAMES;
             killObject(o);
             continue;
         }
-        o->z -= o->vz;
+        o->z -= stepVz;
 
         const s16 sx = WORLD_screenX(o->wx, o->z);
         const s16 sy = WORLD_screenYBottom(o->wy, o->z);
@@ -239,18 +259,28 @@ static void handleInput(void)
 
     if (paused) return;
 
-    if (joy & BUTTON_LEFT)  playerX -= PLAYER_SPEED;
-    if (joy & BUTTON_RIGHT) playerX += PLAYER_SPEED;
-    if (joy & BUTTON_UP)    playerY -= PLAYER_SPEED;
-    if (joy & BUTTON_DOWN)  playerY += PLAYER_SPEED;
+    if ((pressed & BUTTON_A) && enemySpeedPct > ENEMY_SPEED_MIN)
+        enemySpeedPct -= ENEMY_SPEED_STEP;
+    if ((pressed & BUTTON_B) && enemySpeedPct < ENEMY_SPEED_MAX)
+        enemySpeedPct += ENEMY_SPEED_STEP;
+
+    if ((pressed & BUTTON_Y) && playerSpeed < PLAYER_SPEED_MAX)
+        playerSpeed += PLAYER_SPEED_STEP;
+    if ((pressed & BUTTON_Z) && playerSpeed > PLAYER_SPEED_MIN)
+        playerSpeed -= PLAYER_SPEED_STEP;
+
+    if (pressed & BUTTON_X)
+        fireShot();
+
+    if (joy & BUTTON_LEFT)  playerX -= playerSpeed;
+    if (joy & BUTTON_RIGHT) playerX += playerSpeed;
+    if (joy & BUTTON_UP)    playerY -= playerSpeed;
+    if (joy & BUTTON_DOWN)  playerY += playerSpeed;
 
     if (playerX < PLAYER_MIN_X) playerX = PLAYER_MIN_X;
     if (playerX > PLAYER_MAX_X) playerX = PLAYER_MAX_X;
     if (playerY < PLAYER_MIN_Y) playerY = PLAYER_MIN_Y;
     if (playerY > playerMaxY)   playerY = playerMaxY;
-
-    if (pressed & (BUTTON_A | BUTTON_B))
-        fireShot();
 }
 
 // --- Main -------------------------------------------------------------------
@@ -263,6 +293,7 @@ int main(bool hardReset)
     // does not display on NTSC hardware, which falls back to 320x224.
     VDP_setScreenWidth320();
     if (IS_PAL_SYSTEM) VDP_setScreenHeight240();
+    JOY_setSupport(PORT_1, JOY_SUPPORT_6BTN);
 
     // Ground first: stabilises TILE_MAX_NUM, then reserve VRAM after the
     // ground tileset for runtime scaling slots before the sprite pool exists.
@@ -277,11 +308,18 @@ int main(bool hardReset)
     PAL_setPalette(PAL1, spr_player.palette->data, CPU);
     playerX = PLAYER_CENTER_X;
     playerY = playerMaxY - 8;
+    playerSpeed = PLAYER_SPEED_DEFAULT;
+    enemySpeedPct = ENEMY_SPEED_DEFAULT;
     player = SPR_addSprite(&spr_player, playerX, playerY,
                            TILE_ATTR(PAL1, 0, FALSE, FALSE));
 
     renderer = &RENDER_stored;
     renderer->init();
+
+    sky_init();
+    sky_setHorizon(GROUND_horizon);
+    sky_vblank();
+    SYS_setVIntCallback(sky_vblank);
 
     playGetReady();
 
@@ -296,6 +334,7 @@ int main(bool hardReset)
             const s16 pitchY = ((PLAYER_MIN_Y + playerMaxY) / 2) - playerY;
             GROUND_update(playerX - PLAYER_CENTER_X, pitchY, playerWorldX(),
                           GROUND_FORWARD_SPEED);
+            sky_setHorizon(GROUND_horizon);
 
             spawnTimer++;
             if (spawnTimer >= WORLD_SPAWN_INTERVAL)
@@ -311,17 +350,21 @@ int main(bool hardReset)
             if (hurtFlash)
             {
                 hurtFlash--;
-                PAL_setColor(0, (hurtFlash & 4) ? RGB24_TO_VDPCOLOR(0xC00000)
-                                                : RGB24_TO_VDPCOLOR(0x000000));
+                SPR_setVisibility(player, (hurtFlash & HURT_FLASH_PHASE)
+                                           ? HIDDEN
+                                           : VISIBLE);
+            }
+            else
+            {
+                SPR_setVisibility(player, VISIBLE);
             }
         }
 
-        HUD_update(renderer->name, countObjects(), hits);
+        HUD_update(renderer->name, countObjects(), hits, enemySpeedPct);
 
         SPR_setPosition(player, playerX, playerY);
         SPR_update();
         SYS_doVBlankProcess();
-        VDP_waitVSync();   // second PAL VBlank -> 25 Hz game loop
     }
 
     return 0;

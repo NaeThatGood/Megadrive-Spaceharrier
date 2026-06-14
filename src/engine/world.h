@@ -23,14 +23,13 @@
 #define WORLD_Z_NEAR    256
 #define WORLD_Z_FAR     4096
 
-// Game logic runs at 25 Hz (every 2nd PAL VBlank) to leave CPU headroom for
-// runtime scaling. Constants are 2x the old 50 Hz values so motion still
-// matches arcade Space Harrier pacing.
-#define GROUND_FORWARD_SPEED    20
-#define WORLD_APPROACH_VZ_BASE  116
-#define WORLD_APPROACH_VZ_RAND  62      // vz in [BASE, BASE + RAND]
-#define WORLD_SHOT_SPEED        528
-#define WORLD_SPAWN_INTERVAL    8
+// Game logic runs at the PAL refresh rate (50 Hz). Distances are per-frame;
+// intervals are in frames.
+#define GROUND_FORWARD_SPEED    10
+#define WORLD_APPROACH_VZ_BASE  58
+#define WORLD_APPROACH_VZ_RAND  31      // vz in [BASE, BASE + RAND]
+#define WORLD_SHOT_SPEED        264
+#define WORLD_SPAWN_INTERVAL    16
 
 // Ground plane depth offset: bottom of a ground object at z = Z_NEAR
 // sits at GROUND_horizon + GROUND_DEPTH pixels.

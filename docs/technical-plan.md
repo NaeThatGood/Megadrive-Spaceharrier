@@ -9,7 +9,7 @@ Mega Drive hardware (7.67 MHz 68000, VDP with no hardware sprite scaling):
 2. **Runtime scaling** — software nearest-neighbour scaling on the 68000.
 
 Both share one gameplay shell and are toggled at runtime (C). START pauses.
-The game loop runs at 25 Hz on PAL (two VBlanks per frame) for runtime-scaling headroom.
+The game loop runs at the PAL refresh rate, 50 Hz.
 
 ## Architecture
 
@@ -70,7 +70,7 @@ pseudo-3D games, at the machine's highest PAL resolution (320x240, V30):
 
 ### Stored-frame renderer (`src/prototypes/stored_frames/`)
 
-- `tools/gen_scale_frames.py` renders 15 sizes (8..64 px, 4 px steps) of the
+- `tools/gen_scale_frames.py` renders 50 sizes (8..64 px, ~1 px steps) of the
   64x64 master enemy onto 64x64 canvases, bottom-centre anchored, in one
   sprite sheet. rescomp trims empty 8x8 tiles, so small frames are cheap.
 - At runtime: map `sizePx` to a frame index; `SPR_setFrame()` makes the

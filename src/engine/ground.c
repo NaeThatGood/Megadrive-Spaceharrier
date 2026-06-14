@@ -18,11 +18,22 @@
 //    tile data per frame - unnecessary for a flat two-tone checker).
 //
 // Plane geometry (must match tools/gen_assets.py gen_ground):
-//   320x352 board, horizon at image row 160, on-screen horizon at row 96
-//   when V-scroll = BOARD_PAD_TOP (neutral pitch).
+//   384x352 board, horizon at image row 160, on-screen horizon at row 96
+//   when V-scroll = BOARD_PAD_TOP (neutral pitch). The centered 320 px view
+//   gets 32 px of side margin so line scroll does not expose plane wrapping.
 #define PITCH_RANGE        64              // must match gen_assets.py
 #define BOARD_PAD_TOP      64              // must match gen_assets.py PAD_TOP
+#define BOARD_W            384              // IMG_W in gen_assets.py
 #define BOARD_H            352              // IMG_H in gen_assets.py
+#define BOARD_HORIZON      (GROUND_HORIZON + BOARD_PAD_TOP)
+#define CHECKER_START_PAD  2
+#define VIEW_W             320
+#define HSCROLL_MIN        (VIEW_W - BOARD_W)
+#define HSCROLL_MAX        0
+#define HSCROLL_CENTER     (HSCROLL_MIN / 2)
+#define GROUND_SWAY_SHIFT  10
+#define GROUND_SWAY_ROUND  (1 << (GROUND_SWAY_SHIFT - 1))
+#define VANISH_SHIFT       3
 
 #define MAX_LINES          240              // PAL V30
 
@@ -40,6 +51,13 @@ static u16 fwdAcc;                          // 8.8 fixed, 1.0 = quarter cell
 static u16 blendLD[4];                      // light -> dark, 4 sub-steps
 static u16 blendDL[4];                      // dark -> light, 4 sub-steps
 static u16 checkerCols[CHECKER_ENTRIES];
+
+static s16 clampHScroll(s16 scroll)
+{
+    if (scroll < HSCROLL_MIN) return HSCROLL_MIN;
+    if (scroll > HSCROLL_MAX) return HSCROLL_MAX;
+    return scroll;
+}
 
 // Linear blend between two VDP colours, num/4 of the way from a to b
 static u16 lerpColor(u16 a, u16 b, u16 num)
@@ -70,7 +88,7 @@ void GROUND_init(void)
 
     VDP_setScrollingMode(HSCROLL_LINE, VSCROLL_PLANE);
 
-    // Taller-than-screen board (44 tile rows); 64x64 plane fits 352 px height.
+    // Wider/taller board (48x44 tiles); 64x64 plane fits 384x352 px.
     VDP_setPlaneSize(64, 64, TRUE);
     VDP_drawImageEx(BG_B, &img_ground,
                     TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, TILE_USER_INDEX),
@@ -82,31 +100,37 @@ void GROUND_init(void)
 
 void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
 {
-    GROUND_horizon = GROUND_HORIZON;
-
     // --- Vertical pitch: scroll the tall board to move the horizon --------
     s16 vs = BOARD_PAD_TOP + ((pitchY * PITCH_RANGE) >> 7);
     // If pitch goes the wrong way, negate vs.
     VDP_setVerticalScroll(BG_B, vs);
 
-    // --- Per-line H scroll: sky parallax + perspective ramp -------------
-    const s16 skyScroll = -(swayX >> 3);
-    const s16 a = swayX;            // full-strength lean
-    const s16 b = vanishX >> 1;     // convergence point follows player X
+    // --- Per-line H scroll: fixed empty headroom + gentle perspective ramp --
+    const s16 b = vanishX >> VANISH_SHIFT;  // convergence follows player X
 
-    for (u16 y = 0; y < (u16) GROUND_HORIZON; y++)
-        lineScroll[y] = skyScroll;
+    const s16 horizonY = BOARD_HORIZON - vs;
+    GROUND_horizon = horizonY;
 
-    for (u16 y = GROUND_HORIZON; y < screenH; y++)
+    s16 checkerStartY = horizonY + CHECKER_START_PAD;
+    if (checkerStartY < 0) checkerStartY = 0;
+    if (checkerStartY > (s16) screenH) checkerStartY = (s16) screenH;
+
+    for (u16 y = 0; y < (u16) checkerStartY; y++)
+        lineScroll[y] = HSCROLL_CENTER;
+
+    for (u16 y = (u16) checkerStartY; y < screenH; y++)
     {
-        const s16 d = (s16) y - GROUND_HORIZON;
-        lineScroll[y] = -(((a * d) >> 5) + b);
+        const s16 d = (s16) y - horizonY;
+        lineScroll[y] = clampHScroll(
+            HSCROLL_CENTER
+            - (((((s32) swayX * d) + GROUND_SWAY_ROUND) >> GROUND_SWAY_SHIFT)
+               + b));
     }
 
     VDP_setHorizontalScrollLine(BG_B, 0, lineScroll, screenH, DMA_QUEUE);
 
     // --- Forward motion: rotate the checker palette entries -------------
-    fwdAcc += speed * 21;       // speed 20 ~= one checker cell every 5 frames @ 25 Hz
+    fwdAcc += speed * 21;       // speed 10 ~= one checker cell every 10 frames @ 50 Hz
 
     const u16 tQ = (fwdAcc >> 8) & 7;      // quarter-band counter
     const u16 sub = (fwdAcc >> 6) & 3;     // blend sub-step within a band
@@ -118,5 +142,5 @@ void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
                        : (q < 7) ? COL_DARK
                                  : blendDL[sub];
     }
-    PAL_setColors(CHECKER_PAL_BASE, checkerCols, CHECKER_ENTRIES, CPU);
+    PAL_setColors(CHECKER_PAL_BASE, checkerCols, CHECKER_ENTRIES, DMA_QUEUE);
 }

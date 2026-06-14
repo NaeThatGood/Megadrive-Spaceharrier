@@ -10,7 +10,7 @@ From the rescomp build log (all values from the actual build):
 
 | Resource | Uncompressed | In ROM (FAST/BEST packed) |
 | --- | --- | --- |
-| Enemy scale strip, 15 frames 8..64 px | 13,024 B tiles | ~6.5 KB |
+| Enemy scale strip, 50 frames 8..64 px | 45,504 B tiles | ~31 KB |
 | Enemy 64x64 master (runtime mode, raw 4bpp) | 2,048 B | 2,048 B (uncompressed by design) |
 | Ground screen image 320x224 (tiles + map) | ~17 KB | 8.4 KB |
 | Player sprite 32x48 | 768 B | <1 KB |
@@ -22,12 +22,12 @@ content is ~60 KB).
 
 ## Stored-frame cost model
 
-A scale strip of sizes 8..64 px in 4 px steps, 4bpp, tile-rounded:
+A scale strip of 50 sizes from 8..64 px, 4bpp, tile-rounded:
 
-- Sum of tile bytes = 13,024 B per *pose* (measured ~50% compressible for
-  flat-shaded art; assume 7 KB packed conservatively).
-- An animated enemy (4 animation frames per scale step) = ~52 KB raw,
-  ~28 KB packed.
+- Sum of tile bytes = 45,504 B per *pose* (measured ~31 KB packed for
+  flat-shaded art).
+- An animated enemy (4 animation frames per scale step) = ~182 KB raw,
+  ~124 KB packed.
 - A large boss with steps up to 128 px roughly quadruples that: ~110 KB
   packed per animated boss.
 
@@ -46,9 +46,9 @@ Working allocation:
 
 That enemy budget supports, mixed and matched:
 
-- ~170 *static* poses (7 KB each), or
-- **~40 fully animated enemy/object types** (28 KB each), or
-- ~30 animated types + 2-3 large animated bosses.
+- ~38 *static* poses (31 KB each), or
+- **~9 fully animated enemy/object types** (124 KB each), or
+- fewer animated types plus 2-3 large animated bosses.
 
 For reference, the arcade Space Harrier has roughly 25-30 distinct
 enemy/obstacle types — comfortably inside this budget, with animation,
