@@ -23,19 +23,19 @@
 #define WORLD_Z_NEAR    256
 #define WORLD_Z_FAR     4096
 
-// Game logic runs at the PAL refresh rate (50 Hz). Distances are per-frame;
-// intervals are in frames.
-#define GROUND_FORWARD_SPEED    10
-#define WORLD_APPROACH_VZ_BASE  58
-#define WORLD_APPROACH_VZ_RAND  31      // vz in [BASE, BASE + RAND]
-#define WORLD_SHOT_SPEED        264
-#define WORLD_SPAWN_INTERVAL    16
+// Game logic is locked to every other NTSC VBlank (30 Hz). Distances are
+// per-frame; intervals are in frames.
+#define GROUND_FORWARD_SPEED    22
+#define WORLD_APPROACH_VZ_BASE  97
+#define WORLD_APPROACH_VZ_RAND  53      // vz in [BASE, BASE + RAND]
+#define WORLD_SHOT_SPEED        440
+#define WORLD_SPAWN_INTERVAL    10
 
 // Ground plane depth offset: bottom of a ground object at z = Z_NEAR
 // sits at GROUND_horizon + GROUND_DEPTH pixels.
 #define WORLD_GROUND_DEPTH  110
 
-#define MAX_OBJECTS     8
+#define MAX_OBJECTS     3
 #define MAX_SHOTS       4
 
 // Runtime renderer: each object owns this many VRAM tiles (see render_runtime.c).

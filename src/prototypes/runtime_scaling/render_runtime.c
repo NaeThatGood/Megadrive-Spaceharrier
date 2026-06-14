@@ -84,7 +84,6 @@ u16 RUNTIME_spriteVramBudget(void)
 
     u16 sprVram = (u16) (TILE_MAX_NUM - rtEnd - 1);
     if (sprVram < 256) sprVram = 256;
-    if (sprVram > 420) sprVram = 420;
     return sprVram;
 }
 

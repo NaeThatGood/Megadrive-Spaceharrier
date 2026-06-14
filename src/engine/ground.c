@@ -19,12 +19,17 @@
 //
 // Plane geometry (must match tools/gen_assets.py gen_ground):
 //   384x352 board, horizon at image row 160, on-screen horizon at row 96
-//   when V-scroll = BOARD_PAD_TOP (neutral pitch). The centered 320 px view
-//   gets 32 px of side margin so line scroll does not expose plane wrapping.
+//   when V-scroll = BOARD_PAD_TOP (neutral pitch). Only the left 192 px are
+//   stored; the right half is drawn with VDP horizontal tile flip attributes.
+//   The centered 320 px view gets 32 px of side margin so line scroll does not
+//   expose plane wrapping.
 #define PITCH_RANGE        64              // must match gen_assets.py
 #define BOARD_PAD_TOP      64              // must match gen_assets.py PAD_TOP
 #define BOARD_W            384              // IMG_W in gen_assets.py
 #define BOARD_H            352              // IMG_H in gen_assets.py
+#define BOARD_TILES_W      (BOARD_W / 8)
+#define BOARD_TILES_H      (BOARD_H / 8)
+#define BOARD_HALF_TILES_W (BOARD_TILES_W / 2)
 #define BOARD_HORIZON      (GROUND_HORIZON + BOARD_PAD_TOP)
 #define CHECKER_START_PAD  2
 #define VIEW_W             320
@@ -35,7 +40,7 @@
 #define GROUND_SWAY_ROUND  (1 << (GROUND_SWAY_SHIFT - 1))
 #define VANISH_SHIFT       3
 
-#define MAX_LINES          240              // PAL V30
+#define MAX_LINES          240              // maximum V30 height
 
 // Checker palette entries (PAL0 indices 7..14, see gen_assets.py)
 #define CHECKER_PAL_BASE   7
@@ -51,6 +56,7 @@ static u16 fwdAcc;                          // 8.8 fixed, 1.0 = quarter cell
 static u16 blendLD[4];                      // light -> dark, 4 sub-steps
 static u16 blendDL[4];                      // dark -> light, 4 sub-steps
 static u16 checkerCols[CHECKER_ENTRIES];
+static u16 groundRow[BOARD_TILES_W];
 
 static s16 clampHScroll(s16 scroll)
 {
@@ -72,6 +78,43 @@ static u16 lerpColor(u16 a, u16 b, u16 num)
     return out;
 }
 
+static void drawMirroredGround(void)
+{
+    TileMap* unpacked = NULL;
+    const TileMap* tm = img_ground.tilemap;
+    const u16 base = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, TILE_USER_INDEX);
+
+    VDP_loadTileSet(img_ground.tileset, TILE_USER_INDEX, DMA);
+
+    if (tm->compression != COMPRESSION_NONE)
+    {
+        unpacked = unpackTileMap(tm, NULL);
+        if (!unpacked)
+        {
+            VDP_clearPlane(BG_B, TRUE);
+            return;
+        }
+        tm = unpacked;
+    }
+
+    for (u16 y = 0; y < BOARD_TILES_H; y++)
+    {
+        const u16* src = tm->tilemap + y * BOARD_HALF_TILES_W;
+
+        for (u16 x = 0; x < BOARD_HALF_TILES_W; x++)
+            groundRow[x] = src[x];
+
+        for (u16 x = 0; x < BOARD_HALF_TILES_W; x++)
+            groundRow[BOARD_TILES_W - 1 - x] = src[x] ^ TILE_ATTR_HFLIP_MASK;
+
+        VDP_setTileMapDataRectEx(BG_B, groundRow, base,
+                                  0, y, BOARD_TILES_W, 1, BOARD_TILES_W,
+                                  CPU);
+    }
+
+    if (unpacked) MEM_free(unpacked);
+}
+
 void GROUND_init(void)
 {
     PAL_setPalette(PAL0, img_ground.palette->data, CPU);
@@ -90,9 +133,7 @@ void GROUND_init(void)
 
     // Wider/taller board (48x44 tiles); 64x64 plane fits 384x352 px.
     VDP_setPlaneSize(64, 64, TRUE);
-    VDP_drawImageEx(BG_B, &img_ground,
-                    TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, TILE_USER_INDEX),
-                    0, 0, FALSE, TRUE);
+    drawMirroredGround();
 
     memset(lineScroll, 0, sizeof(lineScroll));
     GROUND_update(0, 0, 0, 0);
@@ -130,7 +171,7 @@ void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
     VDP_setHorizontalScrollLine(BG_B, 0, lineScroll, screenH, DMA_QUEUE);
 
     // --- Forward motion: rotate the checker palette entries -------------
-    fwdAcc += speed * 21;       // speed 10 ~= one checker cell every 10 frames @ 50 Hz
+    fwdAcc += speed * 21;       // speed 22 ~= one checker cell every 5 frames @ 30 Hz
 
     const u16 tQ = (fwdAcc >> 8) & 7;      // quarter-band counter
     const u16 sub = (fwdAcc >> 6) & 3;     // blend sub-step within a band

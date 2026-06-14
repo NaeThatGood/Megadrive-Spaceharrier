@@ -7,6 +7,11 @@
 // a taller board bitmap; world projection uses GROUND_horizon (set each frame).
 #define GROUND_HORIZON  96
 
+// The checker art intentionally leaves the first few rows below the projection
+// horizon transparent to avoid near-horizon moire. Use this when anchoring
+// screen-space colour effects to the first visible ground row.
+#define GROUND_VISIBLE_HORIZON_PAD  14
+
 // Current on-screen horizon scanline; used by the world projection so
 // sprites stay glued to the floor as the horizon moves.
 extern s16 GROUND_horizon;

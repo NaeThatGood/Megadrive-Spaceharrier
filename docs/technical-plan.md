@@ -9,7 +9,7 @@ Mega Drive hardware (7.67 MHz 68000, VDP with no hardware sprite scaling):
 2. **Runtime scaling** — software nearest-neighbour scaling on the 68000.
 
 Both share one gameplay shell and are toggled at runtime (C). START pauses.
-The game loop runs at the PAL refresh rate, 50 Hz.
+The game loop targets 30 Hz on NTSC by waiting two VBlanks per update.
 
 ## Architecture
 

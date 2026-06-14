@@ -12,6 +12,9 @@ const SkyKeyframe SKY_KEYFRAMES[SKY_KEYFRAME_COUNT] =
 static u16 ramp[SKY_RAMP_SIZE];
 static s16 horizonY;
 static const u16* skyReadPtr;
+static vu16 skyLinesLeft;       // scanlines the HINT should still fire this frame
+static vu16 skySkipLines;       // flat top lines before the transition band
+static vu16 skyResetLine;       // restore backdrop colour just below horizon
 
 static u16 rgbToVdp(u8 r, u8 g, u8 b)
 {
@@ -56,8 +59,28 @@ static u16 keyframeColor(s16 d)
 // Keep this minimal: it runs once per scanline near HBlank.
 HINTERRUPT_CALLBACK sky_hint(void)
 {
+    if (skySkipLines)
+    {
+        skySkipLines--;
+        return;
+    }
+
     *((vu32*) VDP_CTRL_PORT) = 0xC0000000UL | ((u32) (SKY_CRAM_INDEX * 2) << 16);
     *((vu16*) VDP_DATA_PORT) = *skyReadPtr++;
+
+    if (skyLinesLeft)
+    {
+        if (--skyLinesLeft == 0)
+        {
+            skyReadPtr = &ramp[0];
+            if (!skyResetLine)
+                VDP_setHInterrupt(FALSE);
+        }
+        return;
+    }
+
+    VDP_setHInterrupt(FALSE);       // reset line written; gate off for the frame
+    skyResetLine = FALSE;
 }
 
 void sky_init(void)
@@ -67,6 +90,9 @@ void sky_init(void)
 
     horizonY = 0;
     skyReadPtr = &ramp[SKY_H0];
+    skyLinesLeft = 1;
+    skySkipLines = 0;
+    skyResetLine = FALSE;
 
     SYS_setHIntCallback(sky_hint);
     VDP_setHIntCounter(0);
@@ -85,5 +111,22 @@ void sky_vblank(void)
     s16 h = horizonY;
     if (h < 0) h = 0;
     if (h > SKY_H0) h = SKY_H0;
-    skyReadPtr = &ramp[SKY_H0 - h];
+
+    s16 start = h - SKY_TRANSITION;
+    if (start < 0) start = 0;
+
+    const u16 startIndex = (u16) (SKY_H0 - h + start);
+
+    // The flat top is held by one VBlank CRAM write; HINTs only draw the
+    // transition band down to the horizon.
+    *((vu32*) VDP_CTRL_PORT) = 0xC0000000UL | ((u32) (SKY_CRAM_INDEX * 2) << 16);
+    *((vu16*) VDP_DATA_PORT) = (start == 0) ? ramp[startIndex] : ramp[0];
+
+    skyReadPtr = &ramp[startIndex];
+    skyLinesLeft = (u16) (h - start + 1);
+    skySkipLines = (u16) start;
+    skyResetLine = (((u16) h + 1) < SKY_SCREEN_H_MAX) ? TRUE : FALSE;
+    VDP_setHIntCounter(0);
+
+    VDP_setHInterrupt(TRUE);        // re-arm for the new frame
 }

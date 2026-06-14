@@ -17,16 +17,24 @@
 #define PLAYER_GROUND_SINK  8             // feet dip into checker when low
 
 #define PLAYER_CENTER_X ((320 - PLAYER_W) / 2)
-#define HURT_FLASH_FRAMES  32
-#define HURT_FLASH_PHASE   8
-#define PLAYER_SPEED_DEFAULT  3
-#define PLAYER_SPEED_MIN      1
-#define PLAYER_SPEED_MAX      8
-#define PLAYER_SPEED_STEP     1
+#define HURT_FLASH_FRAMES  16
+#define HURT_FLASH_PHASE   4
+#define PLAYER_SPEED_DEFAULT  7
+#define PLAYER_SPEED_MIN      2
+#define PLAYER_SPEED_MAX      19
+#define PLAYER_SPEED_STEP     2
 #define ENEMY_SPEED_DEFAULT  50
 #define ENEMY_SPEED_MIN      10
 #define ENEMY_SPEED_MAX      200
 #define ENEMY_SPEED_STEP     10
+#define MAX_TREES            4
+#define TREE_FRAME_COUNT     25
+#define TREE_FRAME_CANVAS_W  64
+#define TREE_FRAME_CANVAS_H  240
+#define TREE_Z_SPACING       ((WORLD_Z_FAR - WORLD_Z_NEAR) / MAX_TREES)
+#define TREE_DEPTH           200
+#define TREE_ALLOC_MAX       3
+#define PLAYER_DEPTH         0
 
 static Sprite* player;
 static s16 playerX;
@@ -35,6 +43,16 @@ static s16 playerMaxY;     // lowest Y (ground hover); depends on screen height
 
 static WObj  objects[MAX_OBJECTS];
 static WShot shots[MAX_SHOTS];
+
+typedef struct
+{
+    s16     wx;
+    u16     z;
+    u8      sizeIdx;
+    Sprite* spr;
+} WTree;
+
+static WTree trees[MAX_TREES];
 
 static const Renderer* renderer;
 static u16 hits;
@@ -72,6 +90,96 @@ static u16 enemyStepVz(const WObj* o)
 {
     const u16 vz = (u16) ((((u32) o->vz * enemySpeedPct) + 50) / 100);
     return (vz == 0) ? 1 : vz;
+}
+
+// --- Trees -------------------------------------------------------------------
+
+static const u8 TREE_FRAME_SIZES[TREE_FRAME_COUNT] =
+{
+     8, 10, 13, 15, 17,
+    20, 22, 24, 27, 29,
+    31, 34, 36, 38, 41,
+    43, 45, 48, 50, 52,
+    55, 57, 59, 62, 64
+};
+
+static u8 treeSizeToFrame(u16 sizePx)
+{
+    u8 best = 0;
+    u16 bestDist = 0xFFFF;
+    for (u8 i = 0; i < TREE_FRAME_COUNT; i++)
+    {
+        const u16 s = TREE_FRAME_SIZES[i];
+        const u16 dist = (sizePx > s) ? (sizePx - s) : (s - sizePx);
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            best = i;
+        }
+    }
+    return best;
+}
+
+static s16 treeLane(u8 i)
+{
+    static const s16 lanes[MAX_TREES] = { -280, 240, -190, 310 };
+    return lanes[i & (MAX_TREES - 1)];
+}
+
+static void resetTree(WTree* t, u8 slot, u16 z)
+{
+    t->wx = treeLane(slot);
+    t->z = z;
+    t->sizeIdx = 0xFF;
+    if (t->spr)
+    {
+        SPR_setFrame(t->spr, 0);
+        SPR_setVisibility(t->spr, HIDDEN);
+    }
+}
+
+static void initTrees(void)
+{
+    PAL_setPalette(PAL3, spr_tree_scaled.palette->data, CPU);
+
+    for (u8 i = 0; i < MAX_TREES; i++)
+    {
+        trees[i].spr = (i < TREE_ALLOC_MAX)
+            ? SPR_addSprite(&spr_tree_scaled, -128, -128,
+                            TILE_ATTR(PAL3, 0, FALSE, FALSE))
+            : NULL;
+        if (trees[i].spr) SPR_setDepth(trees[i].spr, TREE_DEPTH);
+        resetTree(&trees[i], i, WORLD_Z_FAR - (u16) i * TREE_Z_SPACING);
+    }
+}
+
+static void updateTrees(void)
+{
+    const s16 pwx = playerWorldX();
+
+    for (u8 i = 0; i < MAX_TREES; i++)
+    {
+        WTree* t = &trees[i];
+        if (!t->spr) continue;
+
+        if (t->z <= WORLD_Z_NEAR + GROUND_FORWARD_SPEED)
+            resetTree(t, i, WORLD_Z_FAR);
+        else
+            t->z -= GROUND_FORWARD_SPEED;
+
+        const u8 frame = treeSizeToFrame(WORLD_sizePx(t->z));
+        if (frame != t->sizeIdx)
+        {
+            t->sizeIdx = frame;
+            SPR_setFrame(t->spr, frame);
+        }
+
+        SPR_setPosition(t->spr,
+                        WORLD_screenX(t->wx - pwx, t->z) - (TREE_FRAME_CANVAS_W / 2),
+                        WORLD_screenYBottom(0, t->z) + GROUND_VISIBLE_HORIZON_PAD
+                            - TREE_FRAME_CANVAS_H);
+        SPR_setVisibility(t->spr, VISIBLE);
+    }
 }
 
 // --- Objects ----------------------------------------------------------------
@@ -289,8 +397,8 @@ int main(bool hardReset)
 {
     (void) hardReset;
 
-    // Highest progressive resolution: 320x240 (H40/V30), PAL only - V30
-    // does not display on NTSC hardware, which falls back to 320x224.
+    // NTSC gives a clean 30 Hz game cadence when the loop waits two VBlanks.
+    // PAL still gets the taller 240-line mode, but runs at 25 Hz.
     VDP_setScreenWidth320();
     if (IS_PAL_SYSTEM) VDP_setScreenHeight240();
     JOY_setSupport(PORT_1, JOY_SUPPORT_6BTN);
@@ -312,12 +420,14 @@ int main(bool hardReset)
     enemySpeedPct = ENEMY_SPEED_DEFAULT;
     player = SPR_addSprite(&spr_player, playerX, playerY,
                            TILE_ATTR(PAL1, 0, FALSE, FALSE));
+    if (player) SPR_setDepth(player, PLAYER_DEPTH);
+    initTrees();
 
     renderer = &RENDER_stored;
     renderer->init();
 
     sky_init();
-    sky_setHorizon(GROUND_horizon);
+    sky_setHorizon(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
     sky_vblank();
     SYS_setVIntCallback(sky_vblank);
 
@@ -334,7 +444,7 @@ int main(bool hardReset)
             const s16 pitchY = ((PLAYER_MIN_Y + playerMaxY) / 2) - playerY;
             GROUND_update(playerX - PLAYER_CENTER_X, pitchY, playerWorldX(),
                           GROUND_FORWARD_SPEED);
-            sky_setHorizon(GROUND_horizon);
+            sky_setHorizon(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
 
             spawnTimer++;
             if (spawnTimer >= WORLD_SPAWN_INTERVAL)
@@ -343,6 +453,7 @@ int main(bool hardReset)
                 spawnObject();
             }
 
+            updateTrees();
             updateObjects();
             updateShots();
             if (renderer->frame) renderer->frame();
@@ -350,21 +461,23 @@ int main(bool hardReset)
             if (hurtFlash)
             {
                 hurtFlash--;
-                SPR_setVisibility(player, (hurtFlash & HURT_FLASH_PHASE)
-                                           ? HIDDEN
-                                           : VISIBLE);
+                if (player)
+                    SPR_setVisibility(player, (hurtFlash & HURT_FLASH_PHASE)
+                                               ? HIDDEN
+                                               : VISIBLE);
             }
             else
             {
-                SPR_setVisibility(player, VISIBLE);
+                if (player) SPR_setVisibility(player, VISIBLE);
             }
         }
 
         HUD_update(renderer->name, countObjects(), hits, enemySpeedPct);
 
-        SPR_setPosition(player, playerX, playerY);
+        if (player) SPR_setPosition(player, playerX, playerY);
         SPR_update();
         SYS_doVBlankProcess();
+        VDP_waitVSync();   // NTSC 60 Hz display, 30 Hz game/render cadence
     }
 
     return 0;

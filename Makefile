@@ -35,11 +35,11 @@ ARES := $(shell command -v ares 2>/dev/null)
 endif
 
 ifneq ($(BLASTEM),)
-# Force PAL: the ROM targets 320x240 (V30), which needs a 50 Hz machine
+# Force NTSC: the game loop waits two VBlanks, giving a clean 30 Hz cadence.
 EMU := $(BLASTEM)
-EMUFLAGS := -r E
+EMUFLAGS := -r U
 else
-# ares picks PAL automatically from the ROM header region field (E)
+# ares picks region automatically from the ROM header field.
 EMU := $(ARES)
 EMUFLAGS :=
 endif

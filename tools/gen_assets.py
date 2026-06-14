@@ -4,8 +4,9 @@
 Ground plane checkerboard is procedural. Outputs indexed PNGs for SGDK rescomp.
 
 Outputs:
-  res/sprites/ground.png   384x352 perspective checkerboard plane (PAL0)
-  res/sprites/player.png   32x48 player character sprite sheet, 1 frame (PAL1)
+  res/sprites/ground_left.png  192x352 left half of mirrored checkerboard (PAL0)
+  res/sprites/player.png       32x48 player character sprite sheet, 1 frame (PAL1)
+  res/sprites/tree_src.png     64x240 tree master sprite for pre-rendered scaling
 """
 
 import math
@@ -32,7 +33,7 @@ def make_palette(colors):
 
 
 def gen_ground():
-    """384x352 BG_B board with vertical pitch headroom, SH2 / Burning Force style.
+    """192x352 half-board with vertical pitch headroom, SH2 / Burning Force style.
 
     - Width gives a 32 px side margin around the centered 320 px viewport.
       Height is 224 + 2*PITCH_RANGE so V-scroll can move the horizon without
@@ -55,7 +56,8 @@ def gen_ground():
     PITCH_RANGE = 64
     PAD_TOP = PITCH_RANGE
     PAD_BOTTOM = PITCH_RANGE
-    IMG_W = 384
+    BOARD_W = 384
+    IMG_W = BOARD_W // 2
     IMG_H = 224 + PAD_TOP + PAD_BOTTOM      # 352
     HORIZON = HORIZON_ONSCREEN + PAD_TOP    # 160 inside the tall image
     PHASES = 4          # forward-motion phase bands per checker cell
@@ -112,7 +114,7 @@ def gen_ground():
     P = Z_NEAR
     CELL = 32.0         # world-space checker period (matches SH2-ish density)
     MIN_CELL_W = 4      # below this, rows are haze-only (SH2 horizon mask)
-    cx = IMG_W // 2
+    cx = BOARD_W // 2
     for y in range(HORIZON + 2, IMG_H):
         d = float(y - HORIZON)
         z = F / d
@@ -122,13 +124,16 @@ def gen_ground():
 
         sub = int(math.floor(z * PHASES / CELL)) % PHASES
         for x in range(IMG_W):
-            cell_x = int(math.floor((x - cx) * z / (P * CELL)))
+            # The board is mirrored at x=cx. Offset by half a checker cell in
+            # cell space so the stored edge contains only half of the centre
+            # square; the mirrored half completes it instead of doubling it.
+            cell_x = int(math.floor((x - cx) * z / (P * CELL) + 0.5))
             cell_z = int(math.floor(z / CELL))
             rel = ((cell_x + cell_z) % 2 * PHASES + sub) % (2 * PHASES)
             px[x, y] = CHECKER_BASE + rel
 
-    img.save(os.path.join(SPRITES, "ground.png"))
-    print("wrote ground.png")
+    img.save(os.path.join(SPRITES, "ground_left.png"))
+    print("wrote ground_left.png")
 
 
 def gen_player():
@@ -226,6 +231,67 @@ def gen_enemy():
     print("wrote enemy_src.png, enemy16.png")
 
 
+TREE_PALETTE = [
+    (255, 0, 255),    # 0 transparent
+    (40, 24, 16),     # 1 dark outline
+    (96, 52, 24),     # 2 trunk shadow
+    (152, 84, 36),    # 3 trunk mid
+    (208, 132, 64),   # 4 trunk highlight
+    (16, 56, 24),     # 5 leaf darkest
+    (24, 96, 36),     # 6 leaf shadow
+    (40, 132, 48),    # 7 leaf mid
+    (72, 172, 64),    # 8 leaf light
+    (128, 212, 88),   # 9 leaf highlight
+    (12, 40, 20),     # 10 deep cutout shade
+    (64, 40, 24),     # 11 root shadow
+]
+
+
+def gen_tree():
+    """64x240 master tree sprite, bottom-centre anchored for scale strips."""
+    W, H = 64, 240
+    img = Image.new("P", (W, H), 0)
+    img.putpalette(make_palette(TREE_PALETTE))
+
+    small = Image.new("P", (64, 64), 0)
+    small.putpalette(make_palette(TREE_PALETTE))
+    d = ImageDraw.Draw(small)
+
+    # Roots and trunk.
+    d.polygon([(24, 63), (28, 34), (36, 34), (40, 63)], fill=2, outline=1)
+    d.polygon([(30, 63), (32, 35), (36, 63)], fill=3)
+    d.line([(34, 38), (32, 58)], fill=4)
+    d.polygon([(28, 59), (16, 63), (31, 63)], fill=11, outline=1)
+    d.polygon([(36, 59), (49, 63), (33, 63)], fill=11, outline=1)
+
+    # Layered foliage silhouette with chunky 16-bit readable clusters.
+    blobs = [
+        ([13, 21, 51, 49], 6),
+        ([7, 27, 33, 53], 7),
+        ([31, 27, 57, 53], 7),
+        ([19, 8, 45, 34], 7),
+        ([4, 17, 30, 43], 6),
+        ([34, 16, 60, 42], 6),
+        ([17, 14, 39, 38], 8),
+        ([28, 10, 50, 34], 8),
+    ]
+    for box, fill in blobs:
+        d.ellipse(box, fill=fill, outline=1)
+
+    # Dark pockets give the crown shape at smaller scale levels.
+    for box in ([13, 31, 25, 43], [40, 31, 52, 43], [24, 20, 34, 30]):
+        d.ellipse(box, fill=10)
+
+    # Highlights stay sparse so they survive nearest-neighbour downscaling.
+    for box in ([22, 12, 31, 20], [37, 17, 47, 25], [13, 23, 24, 31],
+                [28, 29, 39, 37]):
+        d.ellipse(box, fill=9)
+
+    img.paste(small.resize((W, H), Image.NEAREST), (0, 0))
+    img.save(os.path.join(SPRITES, "tree_src.png"))
+    print("wrote tree_src.png")
+
+
 def gen_runtime_assets():
     """Assets for the runtime-scaling renderer.
 
@@ -270,5 +336,6 @@ if __name__ == "__main__":
     gen_ground()
     gen_player()
     gen_enemy()
+    gen_tree()
     gen_runtime_assets()
     gen_shot()

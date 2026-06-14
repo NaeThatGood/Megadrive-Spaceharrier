@@ -5,7 +5,7 @@
 // Stored-frame renderer.
 // 50 pre-rendered scale steps (8..64 px, ~1.1 px apart) live in ROM as
 // frames of one sprite sheet, every frame on a 64x64 canvas anchored
-// bottom-centre (see tools/gen_scale_frames.py). The 50 Hz game loop maps
+// bottom-centre (see tools/gen_scale_frames.py). The 30 Hz game loop maps
 // projected size to the nearest step; the sprite engine streams the frame's
 // tiles to VRAM only when the frame index changes.
 
