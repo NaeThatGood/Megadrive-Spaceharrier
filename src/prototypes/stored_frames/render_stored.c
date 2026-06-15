@@ -4,13 +4,14 @@
 
 // Stored-frame renderer.
 // 50 pre-rendered scale steps (8..64 px, ~1.1 px apart) live in ROM as
-// frames of one sprite sheet, every frame on a 64x64 canvas anchored
-// bottom-centre (see tools/gen_scale_frames.py). The 30 Hz game loop maps
-// projected size to the nearest step; the sprite engine streams the frame's
-// tiles to VRAM only when the frame index changes.
+// frames split across 16x16, 32x32, and 64x64 canvas tiers. The 30 Hz game
+// loop maps projected size to the nearest step; the sprite engine streams the
+// tier's smaller frame canvas to VRAM only when the frame index changes.
 
 #define FRAME_COUNT     50
-#define FRAME_CANVAS    64
+#define FRAME_MAX_SIZE  64
+#define TIER_COUNT      3
+#define TIER_NONE       0xFFFF
 
 static const u8 FRAME_SIZES[FRAME_COUNT] =
 {
@@ -21,46 +22,103 @@ static const u8 FRAME_SIZES[FRAME_COUNT] =
     54, 55, 56, 57, 58, 59, 61, 62, 63, 64
 };
 
+typedef struct
+{
+    const SpriteDefinition* def;
+    u8 firstFrame;
+    u8 canvasPx;
+} FrameTier;
+
+static const FrameTier FRAME_TIERS[TIER_COUNT] =
+{
+    { &spr_enemy_scaled_16,  0, 16 },
+    { &spr_enemy_scaled_32,  8, 32 },
+    { &spr_enemy_scaled_64, 22, 64 }
+};
+
+static u8 frameForSize[FRAME_MAX_SIZE + 1];
+
+static void initFrameLut(void)
+{
+    for (u16 size = 0; size <= FRAME_MAX_SIZE; size++)
+    {
+        u8 best = 0;
+        u16 bestDist = 0xFFFF;
+        for (u8 i = 0; i < FRAME_COUNT; i++)
+        {
+            const u16 s = FRAME_SIZES[i];
+            const u16 dist = (size > s) ? (size - s) : (s - size);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = i;
+            }
+        }
+        frameForSize[size] = best;
+    }
+}
+
 static u8 sizeToFrame(u16 sizePx)
 {
-    u8 best = 0;
-    u16 bestDist = 0xFFFF;
-    for (u8 i = 0; i < FRAME_COUNT; i++)
+    if (sizePx > FRAME_MAX_SIZE) return FRAME_COUNT - 1;
+    return frameForSize[sizePx];
+}
+
+static u8 frameToTier(u8 frame)
+{
+    if (frame < FRAME_TIERS[1].firstFrame) return 0;
+    if (frame < FRAME_TIERS[2].firstFrame) return 1;
+    return 2;
+}
+
+static void setStoredFrame(WObj* o, u8 frame)
+{
+    const u8 tierIdx = frameToTier(frame);
+    const FrameTier* tier = &FRAME_TIERS[tierIdx];
+
+    if (o->vramIndex != tierIdx)
     {
-        const u16 s = FRAME_SIZES[i];
-        const u16 dist = (sizePx > s) ? (sizePx - s) : (s - sizePx);
-        if (dist < bestDist)
-        {
-            bestDist = dist;
-            best = i;
-        }
+        if (o->sprs[0])
+            SPR_releaseSprite(o->sprs[0]);
+
+        o->sprs[0] = SPR_addSprite(tier->def, -128, -128,
+                                   TILE_ATTR(PAL2, 0, FALSE, FALSE));
+        o->vramIndex = o->sprs[0] ? tierIdx : TIER_NONE;
+        o->sizeIdx = 0xFF;
     }
-    return best;
+
+    if (o->sprs[0] && frame != o->sizeIdx)
+    {
+        o->sizeIdx = frame;
+        SPR_setFrame(o->sprs[0], frame - tier->firstFrame);
+    }
 }
 
 static void st_init(void)
 {
-    PAL_setPalette(PAL2, spr_enemy_scaled.palette->data, DMA_QUEUE);
+    initFrameLut();
+    PAL_setPalette(PAL2, spr_enemy_scaled_64.palette->data, DMA_QUEUE);
 }
 
 static void st_spawn(WObj* o)
 {
-    o->sprs[0] = SPR_addSprite(&spr_enemy_scaled, -128, -128,
-                           TILE_ATTR(PAL2, 0, FALSE, FALSE));
-    o->sizeIdx = 0;
-    SPR_setFrame(o->sprs[0], 0);
+    o->sprs[0] = NULL;
+    o->vramIndex = TIER_NONE;
+    o->sizeIdx = 0xFF;
+    setStoredFrame(o, 0);
 }
 
 static void st_update(WObj* o, s16 sx, s16 syBottom, u16 sizePx)
 {
     const u8 frame = sizeToFrame(sizePx);
     if (frame != o->sizeIdx)
+        setStoredFrame(o, frame);
+
+    if (o->sprs[0])
     {
-        o->sizeIdx = frame;
-        SPR_setFrame(o->sprs[0], frame);
+        const u8 canvasPx = FRAME_TIERS[o->vramIndex].canvasPx;
+        SPR_setPosition(o->sprs[0], sx - (canvasPx / 2), syBottom - canvasPx);
     }
-    // all frames: 64x64 canvas, bottom-centre anchor
-    SPR_setPosition(o->sprs[0], sx - (FRAME_CANVAS / 2), syBottom - FRAME_CANVAS);
 }
 
 static void st_despawn(WObj* o)

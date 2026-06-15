@@ -30,6 +30,7 @@
 #define TREE_NEAR_SPRITES    1
 #define TREE_FAR_SPRITES     (TREE_VISIBLE_COUNT - TREE_NEAR_SPRITES)
 #define TREE_FRAME_COUNT     25
+#define TREE_FRAME_MAX_SIZE  64
 #define TREE_FRAME_CANVAS_W  64
 #define TREE_NEAR_CANVAS_H   216
 #define TREE_FAR_CANVAS_H    96
@@ -56,6 +57,7 @@ static Sprite* treeNearSprs[TREE_NEAR_SPRITES];
 static Sprite* treeFarSprs[TREE_FAR_SPRITES];
 static u8 treeNearFrameIdx[TREE_NEAR_SPRITES];
 static u8 treeFarFrameIdx[TREE_FAR_SPRITES];
+static u8 treeFrameForSize[TREE_FRAME_MAX_SIZE + 1];
 
 static const Renderer* renderer;
 static u16 hits;
@@ -119,21 +121,30 @@ static const u8 TREE_FRAME_SIZES[TREE_FRAME_COUNT] =
     55, 57, 59, 62, 64
 };
 
+static void initTreeFrameLut(void)
+{
+    for (u16 size = 0; size <= TREE_FRAME_MAX_SIZE; size++)
+    {
+        u8 best = 0;
+        u16 bestDist = 0xFFFF;
+        for (u8 i = 0; i < TREE_FRAME_COUNT; i++)
+        {
+            const u16 s = TREE_FRAME_SIZES[i];
+            const u16 dist = (size > s) ? (size - s) : (s - size);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = i;
+            }
+        }
+        treeFrameForSize[size] = best;
+    }
+}
+
 static u8 treeSizeToFrame(u16 sizePx)
 {
-    u8 best = 0;
-    u16 bestDist = 0xFFFF;
-    for (u8 i = 0; i < TREE_FRAME_COUNT; i++)
-    {
-        const u16 s = TREE_FRAME_SIZES[i];
-        const u16 dist = (sizePx > s) ? (sizePx - s) : (s - sizePx);
-        if (dist < bestDist)
-        {
-            bestDist = dist;
-            best = i;
-        }
-    }
-    return best;
+    if (sizePx > TREE_FRAME_MAX_SIZE) return TREE_FRAME_COUNT - 1;
+    return treeFrameForSize[sizePx];
 }
 
 static s16 treeLane(u8 i)
@@ -150,6 +161,7 @@ static void resetTree(WTree* t, u8 slot, u16 z)
 
 static void initTrees(void)
 {
+    initTreeFrameLut();
     PAL_setPalette(PAL3, spr_tree_scaled.palette->data, CPU);
 
     for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
@@ -185,6 +197,7 @@ static void updateTrees(void)
     const s16 pwx = playerWorldX();
     u8 sorted[MAX_TREES];
     u8 visible[TREE_VISIBLE_COUNT];
+    u16 treeSizePx[MAX_TREES];
     u8 visibleCount = 0;
 
     for (u8 i = 0; i < MAX_TREES; i++)
@@ -194,6 +207,7 @@ static void updateTrees(void)
             resetTree(t, i, WORLD_Z_FAR);
         else
             t->z -= GROUND_FORWARD_SPEED;
+        treeSizePx[i] = WORLD_sizePx(t->z);
         sorted[i] = i;
     }
 
@@ -213,9 +227,9 @@ static void updateTrees(void)
 
     for (u8 i = 0; i < MAX_TREES && visibleCount < TREE_VISIBLE_COUNT; i++)
     {
-        const WTree* t = &trees[sorted[i]];
-        if (WORLD_sizePx(t->z) <= TREE_FRAME_SIZES[TREE_FRAME_COUNT - 1])
-            visible[visibleCount++] = sorted[i];
+        const u8 idx = sorted[i];
+        if (treeSizePx[idx] <= TREE_FRAME_SIZES[TREE_FRAME_COUNT - 1])
+            visible[visibleCount++] = idx;
     }
 
     for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
@@ -229,7 +243,7 @@ static void updateTrees(void)
         }
 
         const WTree* t = &trees[visible[i]];
-        const u8 frame = treeSizeToFrame(WORLD_sizePx(t->z));
+        const u8 frame = treeSizeToFrame(treeSizePx[visible[i]]);
         if (frame != treeNearFrameIdx[i])
         {
             treeNearFrameIdx[i] = frame;
@@ -254,7 +268,7 @@ static void updateTrees(void)
         }
 
         const WTree* t = &trees[visible[visibleIdx]];
-        const u8 frame = treeSizeToFrame(WORLD_sizePx(t->z));
+        const u8 frame = treeSizeToFrame(treeSizePx[visible[visibleIdx]]);
         if (frame != treeFarFrameIdx[i])
         {
             treeFarFrameIdx[i] = frame;
@@ -483,7 +497,7 @@ int main(bool hardReset)
 {
     (void) hardReset;
 
-    // NTSC gives a clean 30 Hz game cadence when the loop waits two VBlanks.
+    // NTSC gives a clean 30 Hz game cadence by advancing once every two VBlanks.
     // PAL still gets the taller 240-line mode, but runs at 25 Hz.
     VDP_setScreenWidth320();
     if (IS_PAL_SYSTEM) VDP_setScreenHeight240();
@@ -562,8 +576,9 @@ int main(bool hardReset)
 
         if (player) SPR_setPosition(player, playerX, playerY);
         SPR_update();
+        // First VBlank: SGDK waits for VBlank start, then flushes DMA/services.
         SYS_doVBlankProcess();
-        VDP_waitVSync();   // NTSC 60 Hz display, 30 Hz game/render cadence
+        VDP_waitVSync();   // Second VBlank: 60 Hz display, 30 Hz game/render.
     }
 
     return 0;

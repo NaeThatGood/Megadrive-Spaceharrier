@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Pre-render scale frames for the stored-frame prototype.
 
-Reads a 64x64 master sprite (res/sprites/enemy_src.png) and emits a single
-horizontal sprite-sheet strip (res/sprites/enemy_scaled.png) with one frame
-per scale step. Every frame sits on a 64x64 canvas, anchored bottom-centre,
-so the engine can position all sizes identically. rescomp trims empty 8x8
-tiles per frame, so small frames cost little ROM despite the fixed canvas.
+Reads a 64x64 master sprite (res/sprites/enemy_src.png) and emits tiered
+horizontal sprite-sheet strips with one frame per scale step. Distant frames
+use 16x16 or 32x32 canvases, while near frames keep the 64x64 canvas. All
+frames are anchored bottom-centre so the engine can position each tier with
+the same ground contact point.
 
 Also emits 25-level tree strips from res/sprites/tree_src.png: a 64x216
 near strip and a 64x96 far strip.
@@ -21,9 +21,13 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPRITES = os.path.join(ROOT, "res", "sprites")
 
-CANVAS = 64
 FRAME_COUNT = 50
 SIZES = [round(8 + 56 * i / (FRAME_COUNT - 1)) for i in range(FRAME_COUNT)]
+ENEMY_TIERS = [
+    ("enemy_scaled_16.png", 16, [s for s in SIZES if s <= 16]),
+    ("enemy_scaled_32.png", 32, [s for s in SIZES if 16 < s <= 32]),
+    ("enemy_scaled_64.png", 64, [s for s in SIZES if s > 32]),
+]
 TREE_CANVAS_W = 64
 TREE_CANVAS_H = 216
 TREE_FAR_CANVAS_H = 96
@@ -35,14 +39,14 @@ TREE_SIZES = [
 ]
 
 
-def write_scaled_strip(src_name, out_name, sizes, canvas_w=CANVAS,
-                       canvas_h=CANVAS, src_crop=None):
+def write_scaled_strip(src_name, out_name, sizes, canvas_w=64,
+                       canvas_h=64, src_crop=None):
     src = Image.open(os.path.join(SPRITES, src_name))
     assert src.mode == "P", "master sprite must be indexed"
     if src_crop is not None:
         src = src.crop(src_crop)
     src_w, src_h = src.size
-    assert src_w == canvas_w
+    assert all(size <= canvas_w for size in sizes)
 
     strip = Image.new("P", (canvas_w * len(sizes), canvas_h), 0)
     strip.putpalette(src.getpalette())
@@ -69,7 +73,8 @@ def write_scaled_strip(src_name, out_name, sizes, canvas_w=CANVAS,
 
 
 def main():
-    write_scaled_strip("enemy_src.png", "enemy_scaled.png", SIZES)
+    for out_name, canvas, sizes in ENEMY_TIERS:
+        write_scaled_strip("enemy_src.png", out_name, sizes, canvas, canvas)
     write_scaled_strip("tree_src.png", "tree_scaled.png", TREE_SIZES,
                        TREE_CANVAS_W, TREE_CANVAS_H, TREE_SRC_CROP)
     write_scaled_strip("tree_src.png", "tree_scaled_far.png", TREE_SIZES,

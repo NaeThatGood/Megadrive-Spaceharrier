@@ -52,6 +52,8 @@ s16 GROUND_horizon;
 
 static s16 lineScroll[MAX_LINES];
 static u16 screenH;
+static u16 prevCheckerStartY;
+static bool lineScrollValid;
 static u16 fwdAcc;                          // 8.8 fixed, 1.0 = quarter cell
 static u16 blendLD[4];                      // light -> dark, 4 sub-steps
 static u16 blendDL[4];                      // dark -> light, 4 sub-steps
@@ -136,6 +138,8 @@ void GROUND_init(void)
     drawMirroredGround();
 
     memset(lineScroll, 0, sizeof(lineScroll));
+    prevCheckerStartY = 0;
+    lineScrollValid = FALSE;
     GROUND_update(0, 0, 0, 0);
 }
 
@@ -156,19 +160,41 @@ void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
     if (checkerStartY < 0) checkerStartY = 0;
     if (checkerStartY > (s16) screenH) checkerStartY = (s16) screenH;
 
-    for (u16 y = 0; y < (u16) checkerStartY; y++)
-        lineScroll[y] = HSCROLL_CENTER;
+    const u16 startY = (u16) checkerStartY;
+    u16 uploadStartY = 0;
 
-    for (u16 y = (u16) checkerStartY; y < screenH; y++)
+    if (lineScrollValid)
     {
-        const s16 d = (s16) y - horizonY;
-        lineScroll[y] = clampHScroll(
-            HSCROLL_CENTER
-            - (((((s32) swayX * d) + GROUND_SWAY_ROUND) >> GROUND_SWAY_SHIFT)
-               + b));
+        uploadStartY = (startY < prevCheckerStartY) ? startY : prevCheckerStartY;
+
+        for (u16 y = prevCheckerStartY; y < startY; y++)
+            lineScroll[y] = HSCROLL_CENTER;
+    }
+    else
+    {
+        for (u16 y = 0; y < startY; y++)
+            lineScroll[y] = HSCROLL_CENTER;
     }
 
-    VDP_setHorizontalScrollLine(BG_B, 0, lineScroll, screenH, DMA_QUEUE);
+    s32 swayAcc = ((s32) swayX * ((s16) startY - horizonY))
+               + GROUND_SWAY_ROUND;
+    const s32 swayStep = swayX;
+
+    for (u16 y = startY; y < screenH; y++)
+    {
+        lineScroll[y] = clampHScroll(
+            HSCROLL_CENTER
+            - ((swayAcc >> GROUND_SWAY_SHIFT) + b));
+        swayAcc += swayStep;
+    }
+
+    if (uploadStartY < screenH)
+    {
+        VDP_setHorizontalScrollLine(BG_B, uploadStartY, &lineScroll[uploadStartY],
+                                    screenH - uploadStartY, DMA_QUEUE);
+    }
+    prevCheckerStartY = startY;
+    lineScrollValid = TRUE;
 
     // --- Forward motion: rotate the checker palette entries -------------
     fwdAcc += speed * 21;       // speed 22 ~= one checker cell every 5 frames @ 30 Hz
