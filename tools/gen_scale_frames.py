@@ -7,8 +7,9 @@ use 16x16 or 32x32 canvases, while near frames keep the 64x64 canvas. All
 frames are anchored bottom-centre so the engine can position each tier with
 the same ground contact point.
 
-Also emits 25-level tree strips from res/sprites/tree_src.png: a 64x216
-near strip and a 64x96 far strip.
+Also emits 25-level tree half-strips from res/sprites/tree_src.png: 32x216
+near frames and 32x96 far frames. The game draws the second half with the
+VDP horizontal flip bit, so the visible tree is vertically symmetrical.
 
 Scale steps must match FRAME_SIZES[] in render_stored.c:
   round(8 + 56 * i / 49)  for i in 0..49  (50 frames, 8..64 px)
@@ -29,6 +30,7 @@ ENEMY_TIERS = [
     ("enemy_scaled_64.png", 64, [s for s in SIZES if s > 32]),
 ]
 TREE_CANVAS_W = 64
+TREE_HALF_CANVAS_W = TREE_CANVAS_W // 2
 TREE_CANVAS_H = 216
 TREE_FAR_CANVAS_H = 96
 TREE_SRC_CROP = (0, 24, 64, 240)
@@ -72,13 +74,41 @@ def write_scaled_strip(src_name, out_name, sizes, canvas_w=64,
           f"{total_px} px, ~{tile_bytes} bytes of tiles (uncompressed)")
 
 
+def write_scaled_tree_half_strip(src_name, out_name, sizes, canvas_h):
+    src = Image.open(os.path.join(SPRITES, src_name))
+    assert src.mode == "P", "master sprite must be indexed"
+    src = src.crop(TREE_SRC_CROP)
+    src_w, src_h = src.size
+    half_src = src.crop((0, 0, src_w // 2, src_h))
+
+    strip = Image.new("P", (TREE_HALF_CANVAS_W * len(sizes), canvas_h), 0)
+    strip.putpalette(src.getpalette())
+
+    total_px = 0
+    tile_bytes = 0
+    for i, size in enumerate(sizes):
+        h = min(round(size * src_h / src_w), canvas_h)
+        half_w = (size + 1) // 2
+        frame = half_src.resize((half_w, h), Image.NEAREST)
+        # Anchor to the inner edge; the paired sprite mirrors from this edge.
+        x = i * TREE_HALF_CANVAS_W + (TREE_HALF_CANVAS_W - half_w)
+        y = canvas_h - h
+        strip.paste(frame, (x, y))
+        total_px += half_w * h
+        tile_bytes += ((half_w + 7) // 8) * ((h + 7) // 8) * 32
+
+    strip.save(os.path.join(SPRITES, out_name))
+    print(f"wrote {out_name}: {len(sizes)} mirrored half frames, "
+          f"{total_px} px, ~{tile_bytes} bytes of tiles (uncompressed)")
+
+
 def main():
     for out_name, canvas, sizes in ENEMY_TIERS:
         write_scaled_strip("enemy_src.png", out_name, sizes, canvas, canvas)
-    write_scaled_strip("tree_src.png", "tree_scaled.png", TREE_SIZES,
-                       TREE_CANVAS_W, TREE_CANVAS_H, TREE_SRC_CROP)
-    write_scaled_strip("tree_src.png", "tree_scaled_far.png", TREE_SIZES,
-                       TREE_CANVAS_W, TREE_FAR_CANVAS_H, TREE_SRC_CROP)
+    write_scaled_tree_half_strip("tree_src.png", "tree_scaled.png",
+                                 TREE_SIZES, TREE_CANVAS_H)
+    write_scaled_tree_half_strip("tree_src.png", "tree_scaled_far.png",
+                                 TREE_SIZES, TREE_FAR_CANVAS_H)
 
 
 if __name__ == "__main__":

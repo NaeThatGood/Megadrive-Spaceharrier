@@ -14,6 +14,7 @@ static s16 horizonY;
 static u16 skyBandStart;
 static const u16* skyReadPtr;
 static vu16 skyLinesLeft;       // scanlines the HINT should still fire this frame
+static vu16 skySkipLines;        // flat-top lines between SKY_HINT_START and band top
 static volatile bool skyDensePending;  // switch to per-line HINTs after first band line
 static vu16 skyResetLine;       // restore backdrop colour just below horizon
 static bool enabled;
@@ -64,30 +65,28 @@ static u16 bandStartForHorizon(s16 h)
     return (start > 0) ? (u16) start : 0;
 }
 
-static void armHintForBandStart(void)
-{
-    // Mega Drive HINT counters fire every counter+1 lines. If the band edge
-    // is one scanline off in-emulator, nudge skyBandStart - 1 by +/-1; because
-    // this is recomputed from the live horizon outside VInt, it will not drift.
-    if (skyBandStart > 0)
-    {
-        VDP_setHIntCounter((u8) (skyBandStart - 1));
-        skyDensePending = TRUE;
-    }
-    else
-    {
-        VDP_setHIntCounter(0);
-        skyDensePending = FALSE;
-    }
-}
-
 // Keep this minimal: it runs once per scanline near HBlank.
 HINTERRUPT_CALLBACK sky_hint(void)
 {
+    // Flat-top gap: the fixed first HINT landed at SKY_HINT_START; software-
+    // count the remaining (variable) lines down to the real band top. No CRAM
+    // write on these lines (the VBlank flat-top write still holds index 0).
+    if (skySkipLines)
+    {
+        skySkipLines--;
+        if (skyDensePending)                 // this is the first HINT of the frame
+        {
+            skyDensePending = FALSE;
+            VDP_setHIntCounter(0);           // per-line firing from here down
+        }
+        return;
+    }
+
+    // Band line - time critical (written during HBlank).
     *((vu32*) VDP_CTRL_PORT) = 0xC0000000UL | ((u32) (SKY_CRAM_INDEX * 2) << 16);
     *((vu16*) VDP_DATA_PORT) = *skyReadPtr++;
 
-    if (skyDensePending)
+    if (skyDensePending)                     // band starts exactly at SKY_HINT_START
     {
         skyDensePending = FALSE;
         VDP_setHIntCounter(0);
@@ -97,14 +96,23 @@ HINTERRUPT_CALLBACK sky_hint(void)
     {
         if (--skyLinesLeft == 0)
         {
-            skyReadPtr = &ramp[0];
+            skyReadPtr = &ramp[0];           // backdrop colour for the reset line
             if (!skyResetLine)
+            {
+                // CRITICAL: restore the fixed skip value so the counter is
+                // NEVER left at 0 going into VBlank. This is what stops the
+                // next frame's first HINT from firing at the top of screen.
+                VDP_setHIntCounter((u8) (SKY_HINT_START - 1));
                 VDP_setHInterrupt(FALSE);
+            }
+            // else keep counter 0 so the reset line fires on the next scanline
         }
         return;
     }
 
-    VDP_setHInterrupt(FALSE);       // reset line written; gate off for the frame
+    // Reset line written; gate off and restore the fixed skip for next frame.
+    VDP_setHIntCounter((u8) (SKY_HINT_START - 1));
+    VDP_setHInterrupt(FALSE);
     skyResetLine = FALSE;
 }
 
@@ -117,12 +125,13 @@ void sky_init(void)
     skyBandStart = 0;
     skyReadPtr = &ramp[SKY_H0];
     skyLinesLeft = 1;
+    skySkipLines = 0;
     skyDensePending = FALSE;
     skyResetLine = FALSE;
     enabled = TRUE;
 
     SYS_setHIntCallback(sky_hint);
-    VDP_setHIntCounter(0);
+    VDP_setHIntCounter(SKY_HINT_START - 1);
     VDP_setHInterrupt(TRUE);
 }
 
@@ -131,8 +140,6 @@ void sky_setEnabled(bool value)
     enabled = value;
     if (!enabled)
         VDP_setHInterrupt(FALSE);
-    else
-        armHintForBandStart();
 }
 
 bool sky_isEnabled(void)
@@ -146,8 +153,6 @@ void sky_setHorizon(s16 y)
     if (y > SKY_H0) y = SKY_H0;
     horizonY = y;
     skyBandStart = bandStartForHorizon(y);
-    if (enabled)
-        armHintForBandStart();
 }
 
 void sky_vblank(void)
@@ -165,18 +170,28 @@ void sky_vblank(void)
     if (h > SKY_H0) h = SKY_H0;
 
     const u16 start = skyBandStart;
-
+    s16 bottom = h + SKY_BOTTOM_ADJUST;
+    if (bottom > (s16) (SKY_RAMP_SIZE - SKY_H0 - 1))
+        bottom = (s16) (SKY_RAMP_SIZE - SKY_H0 - 1);
+    if (bottom > (s16) (SKY_SCREEN_H_MAX - 1))
+        bottom = (s16) (SKY_SCREEN_H_MAX - 1);
     const u16 startIndex = (u16) (SKY_H0 - h + start);
 
-    // The flat top is held by one VBlank CRAM write; HINTs only draw the
-    // transition band down to the horizon.
+    // Flat top (lines 0..band top) is held by this single CRAM write; the HINT
+    // does not fire at all until the fixed SKY_HINT_START line.
     *((vu32*) VDP_CTRL_PORT) = 0xC0000000UL | ((u32) (SKY_CRAM_INDEX * 2) << 16);
-    *((vu16*) VDP_DATA_PORT) = (start == 0) ? ramp[startIndex] : ramp[0];
+    *((vu16*) VDP_DATA_PORT) = ramp[0];
 
-    skyReadPtr = &ramp[startIndex];
-    skyLinesLeft = (u16) (h - start + 1);
-    skyResetLine = (((u16) h + 1) < SKY_SCREEN_H_MAX) ? TRUE : FALSE;
-    skyDensePending = (start > 0) ? TRUE : FALSE;
+    skyReadPtr   = &ramp[startIndex];
+    skyLinesLeft = (u16) (bottom - (s16) start + 1);
+    // Variable gap, software-counted from the FIXED line to the band top.
+    // start >= SKY_HINT_START in all legal horizon positions (band top min ~40).
+    skySkipLines = (start > SKY_HINT_START) ? (u16) (start - SKY_HINT_START) : 0;
+    skyResetLine = (((u16) bottom + 1) < SKY_SCREEN_H_MAX) ? TRUE : FALSE;
+    skyDensePending = TRUE;
 
-    VDP_setHInterrupt(TRUE);        // re-arm for the new frame
+    // Constant skip to the fixed first-HINT line. Constant => immune to the
+    // per-frame counter-reload timing that broke the variable version.
+    VDP_setHIntCounter((u8) (SKY_HINT_START - 1));
+    VDP_setHInterrupt(TRUE);
 }

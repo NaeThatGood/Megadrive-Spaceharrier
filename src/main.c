@@ -32,6 +32,10 @@
 #define TREE_FRAME_COUNT     25
 #define TREE_FRAME_MAX_SIZE  64
 #define TREE_FRAME_CANVAS_W  64
+#define TREE_HALF_CANVAS_W   (TREE_FRAME_CANVAS_W / 2)
+#define TREE_HALF_COUNT      2
+#define TREE_HALF_LEFT       0
+#define TREE_HALF_RIGHT      1
 #define TREE_NEAR_CANVAS_H   216
 #define TREE_FAR_CANVAS_H    96
 #define TREE_Z_SPACING       ((WORLD_Z_FAR - WORLD_Z_NEAR) / MAX_TREES)
@@ -53,8 +57,8 @@ typedef struct
 } WTree;
 
 static WTree trees[MAX_TREES];
-static Sprite* treeNearSprs[TREE_NEAR_SPRITES];
-static Sprite* treeFarSprs[TREE_FAR_SPRITES];
+static Sprite* treeNearSprs[TREE_NEAR_SPRITES][TREE_HALF_COUNT];
+static Sprite* treeFarSprs[TREE_FAR_SPRITES][TREE_HALF_COUNT];
 static u8 treeNearFrameIdx[TREE_NEAR_SPRITES];
 static u8 treeFarFrameIdx[TREE_FAR_SPRITES];
 static u8 treeFrameForSize[TREE_FRAME_MAX_SIZE + 1];
@@ -166,6 +170,53 @@ static void resetTree(WTree* t, u8 slot, u16 z)
     t->z = z;
 }
 
+static void initTreePair(Sprite* sprs[TREE_HALF_COUNT], const SpriteDefinition* def)
+{
+    sprs[TREE_HALF_LEFT] = SPR_addSprite(def, -128, -128,
+                                         TILE_ATTR(PAL3, 0, FALSE, FALSE));
+    sprs[TREE_HALF_RIGHT] = NULL;
+
+    if (sprs[TREE_HALF_LEFT])
+    {
+        const u16 sharedTile = sprs[TREE_HALF_LEFT]->attribut & ~TILE_ATTR_MASK;
+        sprs[TREE_HALF_RIGHT] =
+            SPR_addSpriteEx(def, -128, -128,
+                            TILE_ATTR_FULL(PAL3, 0, FALSE, TRUE, sharedTile),
+                            0);
+    }
+
+    for (u8 half = 0; half < TREE_HALF_COUNT; half++)
+    {
+        if (sprs[half])
+        {
+            SPR_setDepth(sprs[half], TREE_DEPTH);
+            SPR_setVisibility(sprs[half], HIDDEN);
+        }
+    }
+}
+
+static void setTreePairFrame(Sprite* sprs[TREE_HALF_COUNT], u8 frame)
+{
+    for (u8 half = 0; half < TREE_HALF_COUNT; half++)
+        if (sprs[half])
+            SPR_setFrame(sprs[half], frame);
+}
+
+static void setTreePairVisibility(Sprite* sprs[TREE_HALF_COUNT], SpriteVisibility visibility)
+{
+    for (u8 half = 0; half < TREE_HALF_COUNT; half++)
+        if (sprs[half])
+            SPR_setVisibility(sprs[half], visibility);
+}
+
+static void setTreePairPosition(Sprite* sprs[TREE_HALF_COUNT], s16 x, s16 y)
+{
+    if (sprs[TREE_HALF_LEFT])
+        SPR_setPosition(sprs[TREE_HALF_LEFT], x, y);
+    if (sprs[TREE_HALF_RIGHT])
+        SPR_setPosition(sprs[TREE_HALF_RIGHT], x + TREE_HALF_CANVAS_W, y);
+}
+
 static void initTrees(void)
 {
     initTreeFrameLut();
@@ -173,26 +224,14 @@ static void initTrees(void)
 
     for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
     {
-        treeNearSprs[i] = SPR_addSprite(&spr_tree_scaled, -128, -128,
-                                        TILE_ATTR(PAL3, 0, FALSE, FALSE));
+        initTreePair(treeNearSprs[i], &spr_tree_scaled);
         treeNearFrameIdx[i] = 0xFF;
-        if (treeNearSprs[i])
-        {
-            SPR_setDepth(treeNearSprs[i], TREE_DEPTH);
-            SPR_setVisibility(treeNearSprs[i], HIDDEN);
-        }
     }
 
     for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
     {
-        treeFarSprs[i] = SPR_addSprite(&spr_tree_scaled_far, -128, -128,
-                                       TILE_ATTR(PAL3, 0, FALSE, FALSE));
+        initTreePair(treeFarSprs[i], &spr_tree_scaled_far);
         treeFarFrameIdx[i] = 0xFF;
-        if (treeFarSprs[i])
-        {
-            SPR_setDepth(treeFarSprs[i], TREE_DEPTH);
-            SPR_setVisibility(treeFarSprs[i], HIDDEN);
-        }
     }
 
     for (u8 i = 0; i < MAX_TREES; i++)
@@ -243,11 +282,11 @@ static void updateTrees(void)
 
     for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
     {
-        Sprite* spr = treeNearSprs[i];
-        if (!spr) continue;
+        Sprite** sprs = treeNearSprs[i];
+        if (!sprs[TREE_HALF_LEFT] && !sprs[TREE_HALF_RIGHT]) continue;
         if (i >= visibleCount)
         {
-            SPR_setVisibility(spr, HIDDEN);
+            setTreePairVisibility(sprs, HIDDEN);
             continue;
         }
 
@@ -258,23 +297,23 @@ static void updateTrees(void)
         if (frame != treeNearFrameIdx[i])
         {
             treeNearFrameIdx[i] = frame;
-            SPR_setFrame(spr, frame);
+            setTreePairFrame(sprs, frame);
         }
-        SPR_setPosition(spr,
-                        WORLD_screenXq(t->wx - pwx, q) - (TREE_FRAME_CANVAS_W / 2),
-                        WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
-                            - TREE_NEAR_CANVAS_H);
-        SPR_setVisibility(spr, VISIBLE);
+        setTreePairPosition(sprs,
+                            WORLD_screenXq(t->wx - pwx, q) - (TREE_FRAME_CANVAS_W / 2),
+                            WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
+                                - TREE_NEAR_CANVAS_H);
+        setTreePairVisibility(sprs, VISIBLE);
     }
 
     for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
     {
-        Sprite* spr = treeFarSprs[i];
+        Sprite** sprs = treeFarSprs[i];
         const u8 visibleIdx = TREE_NEAR_SPRITES + i;
-        if (!spr) continue;
+        if (!sprs[TREE_HALF_LEFT] && !sprs[TREE_HALF_RIGHT]) continue;
         if (visibleIdx >= visibleCount)
         {
-            SPR_setVisibility(spr, HIDDEN);
+            setTreePairVisibility(sprs, HIDDEN);
             continue;
         }
 
@@ -285,13 +324,13 @@ static void updateTrees(void)
         if (frame != treeFarFrameIdx[i])
         {
             treeFarFrameIdx[i] = frame;
-            SPR_setFrame(spr, frame);
+            setTreePairFrame(sprs, frame);
         }
-        SPR_setPosition(spr,
-                        WORLD_screenXq(t->wx - pwx, q) - (TREE_FRAME_CANVAS_W / 2),
-                        WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
-                            - TREE_FAR_CANVAS_H);
-        SPR_setVisibility(spr, VISIBLE);
+        setTreePairPosition(sprs,
+                            WORLD_screenXq(t->wx - pwx, q) - (TREE_FRAME_CANVAS_W / 2),
+                            WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
+                                - TREE_FAR_CANVAS_H);
+        setTreePairVisibility(sprs, VISIBLE);
     }
 }
 
