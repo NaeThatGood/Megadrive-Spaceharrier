@@ -25,9 +25,9 @@ SPRITES = os.path.join(ROOT, "res", "sprites")
 FRAME_COUNT = 50
 SIZES = [round(8 + 56 * i / (FRAME_COUNT - 1)) for i in range(FRAME_COUNT)]
 ENEMY_TIERS = [
-    ("enemy_scaled_16.png", 16, [s for s in SIZES if s <= 16]),
-    ("enemy_scaled_32.png", 32, [s for s in SIZES if 16 < s <= 32]),
-    ("enemy_scaled_64.png", 64, [s for s in SIZES if s > 32]),
+    ("enemy_scaled_16.png", 16, 16, [s for s in SIZES if s <= 16]),
+    ("enemy_scaled_32.png", 32, 32, [s for s in SIZES if 16 < s <= 32]),
+    ("enemy_scaled_64.png", 64, 64, [s for s in SIZES if s > 32]),
 ]
 TREE_CANVAS_W = 64
 TREE_HALF_CANVAS_W = TREE_CANVAS_W // 2
@@ -102,9 +102,38 @@ def write_scaled_tree_half_strip(src_name, out_name, sizes, canvas_h):
           f"{total_px} px, ~{tile_bytes} bytes of tiles (uncompressed)")
 
 
+def write_scaled_half_strip(src_name, out_name, sizes, canvas_w, canvas_h):
+    src = Image.open(os.path.join(SPRITES, src_name))
+    assert src.mode == "P", "master sprite must be indexed"
+    src_w, src_h = src.size
+    half_canvas_w = canvas_w // 2
+    half_src = src.crop((0, 0, src_w // 2, src_h))
+
+    strip = Image.new("P", (half_canvas_w * len(sizes), canvas_h), 0)
+    strip.putpalette(src.getpalette())
+
+    total_px = 0
+    tile_bytes = 0
+    for i, size in enumerate(sizes):
+        h = min(round(size * src_h / src_w), canvas_h)
+        half_w = (size + 1) // 2
+        frame = half_src.resize((half_w, h), Image.NEAREST)
+        # Anchor to the inner edge; the paired sprite mirrors from this edge.
+        x = i * half_canvas_w + (half_canvas_w - half_w)
+        y = canvas_h - h
+        strip.paste(frame, (x, y))
+        total_px += half_w * h
+        tile_bytes += ((half_w + 7) // 8) * ((h + 7) // 8) * 32
+
+    strip.save(os.path.join(SPRITES, out_name))
+    print(f"wrote {out_name}: {len(sizes)} mirrored half frames, "
+          f"{total_px} px, ~{tile_bytes} bytes of tiles (uncompressed)")
+
+
 def main():
-    for out_name, canvas, sizes in ENEMY_TIERS:
-        write_scaled_strip("enemy_src.png", out_name, sizes, canvas, canvas)
+    for out_name, canvas_w, canvas_h, sizes in ENEMY_TIERS:
+        write_scaled_half_strip("enemy_src.png", out_name, sizes,
+                                canvas_w, canvas_h)
     write_scaled_tree_half_strip("tree_src.png", "tree_scaled.png",
                                  TREE_SIZES, TREE_CANVAS_H)
     write_scaled_tree_half_strip("tree_src.png", "tree_scaled_far.png",

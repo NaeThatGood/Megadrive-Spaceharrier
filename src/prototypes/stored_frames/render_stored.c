@@ -79,18 +79,54 @@ static void setStoredFrame(WObj* o, u8 frame)
     if (o->vramIndex != tierIdx)
     {
         if (o->sprs[0])
+        {
             SPR_releaseSprite(o->sprs[0]);
+            o->sprs[0] = NULL;
+        }
+        if (o->sprs[1])
+        {
+            SPR_releaseSprite(o->sprs[1]);
+            o->sprs[1] = NULL;
+        }
 
         o->sprs[0] = SPR_addSprite(tier->def, -128, -128,
                                    TILE_ATTR(PAL2, 0, FALSE, FALSE));
-        o->vramIndex = o->sprs[0] ? tierIdx : TIER_NONE;
+        if (o->sprs[0])
+        {
+            const u16 sharedTile = o->sprs[0]->attribut & ~TILE_ATTR_MASK;
+            o->sprs[1] =
+                SPR_addSpriteEx(tier->def, -128, -128,
+                                TILE_ATTR_FULL(PAL2, 0, FALSE, TRUE, sharedTile),
+                                0);
+        }
+
+        if (!o->sprs[0] || !o->sprs[1])
+        {
+            if (o->sprs[0])
+            {
+                SPR_releaseSprite(o->sprs[0]);
+                o->sprs[0] = NULL;
+            }
+            if (o->sprs[1])
+            {
+                SPR_releaseSprite(o->sprs[1]);
+                o->sprs[1] = NULL;
+            }
+            o->vramIndex = TIER_NONE;
+        }
+        else
+        {
+            o->vramIndex = tierIdx;
+        }
         o->sizeIdx = 0xFF;
     }
 
-    if (o->sprs[0] && frame != o->sizeIdx)
+    if (o->sprs[0] && o->sprs[1] && frame != o->sizeIdx)
     {
+        const u8 tierFrame = frame - tier->firstFrame;
         o->sizeIdx = frame;
-        SPR_setFrame(o->sprs[0], frame - tier->firstFrame);
+        SPR_setFrame(o->sprs[0], tierFrame);
+        SPR_setFrame(o->sprs[1], tierFrame);
     }
 }
 
@@ -103,6 +139,7 @@ static void st_init(void)
 static void st_spawn(WObj* o)
 {
     o->sprs[0] = NULL;
+    o->sprs[1] = NULL;
     o->vramIndex = TIER_NONE;
     o->sizeIdx = 0xFF;
     setStoredFrame(o, 0);
@@ -114,10 +151,14 @@ static void st_update(WObj* o, s16 sx, s16 syBottom, u16 sizePx)
     if (frame != o->sizeIdx)
         setStoredFrame(o, frame);
 
-    if (o->sprs[0])
+    if (o->sprs[0] && o->sprs[1] && o->vramIndex != TIER_NONE)
     {
         const u8 canvasPx = FRAME_TIERS[o->vramIndex].canvasPx;
-        SPR_setPosition(o->sprs[0], sx - (canvasPx / 2), syBottom - canvasPx);
+        const u8 halfPx = canvasPx / 2;
+        const s16 x = sx - (canvasPx / 2);
+        const s16 y = syBottom - canvasPx;
+        SPR_setPosition(o->sprs[0], x, y);
+        SPR_setPosition(o->sprs[1], x + halfPx, y);
     }
 }
 

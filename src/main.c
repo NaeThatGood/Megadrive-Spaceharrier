@@ -4,6 +4,8 @@
 #include "engine/world.h"
 #include "engine/hud.h"
 #include "engine/sky.h"
+#include "engine/shadow.h"
+#include "engine/mountains.h"
 
 // --- Player -----------------------------------------------------------------
 
@@ -19,7 +21,7 @@
 #define PLAYER_CENTER_X ((320 - PLAYER_W) / 2)
 #define HURT_FLASH_FRAMES  16
 #define HURT_FLASH_PHASE   4
-#define PLAYER_SPEED_DEFAULT  7
+#define PLAYER_SPEED_DEFAULT  4
 #define PLAYER_SPEED_STEP_COUNT  9
 #define ENEMY_SPEED_DEFAULT  50
 #define ENEMY_SPEED_MIN      10
@@ -41,8 +43,10 @@
 #define TREE_Z_SPACING       ((WORLD_Z_FAR - WORLD_Z_NEAR) / MAX_TREES)
 #define TREE_DEPTH           200
 #define PLAYER_DEPTH         0
+#define SHOT_SHADOW_SIZE     12
 
 static Sprite* player;
+static Sprite* playerShadow;
 static s16 playerX;
 static s16 playerY;
 static s16 playerMaxY;     // lowest Y (ground hover); depends on screen height
@@ -59,6 +63,7 @@ typedef struct
 static WTree trees[MAX_TREES];
 static Sprite* treeNearSprs[TREE_NEAR_SPRITES][TREE_HALF_COUNT];
 static Sprite* treeFarSprs[TREE_FAR_SPRITES][TREE_HALF_COUNT];
+static Sprite* treeShadowSprs[TREE_VISIBLE_COUNT];
 static u8 treeNearFrameIdx[TREE_NEAR_SPRITES];
 static u8 treeFarFrameIdx[TREE_FAR_SPRITES];
 static u8 treeFrameForSize[TREE_FRAME_MAX_SIZE + 1];
@@ -70,6 +75,7 @@ static u16 hurtFlash;
 static u16 playerSpeed;
 static u8 playerSpeedStep;
 static u16 enemySpeedPct;
+static u8 gFramesPerUpdate = 1;
 static u16 prevJoy;
 static bool paused;
 
@@ -101,10 +107,16 @@ static u16 countObjects(void)
     return n;
 }
 
+static s16 playerPitchY(void)
+{
+    return ((PLAYER_MIN_Y + playerMaxY) / 2) - playerY;
+}
+
 static void refreshEnemyStep(WObj* o)
 {
     const u16 vz = (u16) ((((u32) o->vz * enemySpeedPct) + 50) / 100);
-    o->stepVz = (vz == 0) ? 1 : vz;
+    const u16 stepVz = (vz == 0) ? 1 : vz;
+    o->stepVz = stepVz * gFramesPerUpdate;
 }
 
 static void refreshEnemySteps(void)
@@ -225,12 +237,14 @@ static void initTrees(void)
     for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
     {
         initTreePair(treeNearSprs[i], &spr_tree_scaled);
+        treeShadowSprs[i] = SHADOW_add();
         treeNearFrameIdx[i] = 0xFF;
     }
 
     for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
     {
         initTreePair(treeFarSprs[i], &spr_tree_scaled_far);
+        treeShadowSprs[TREE_NEAR_SPRITES + i] = SHADOW_add();
         treeFarFrameIdx[i] = 0xFF;
     }
 
@@ -241,6 +255,7 @@ static void initTrees(void)
 static void updateTrees(void)
 {
     const s16 pwx = playerWorldX();
+    const u16 forwardStep = GROUND_FORWARD_SPEED * gFramesPerUpdate;
     u8 sorted[MAX_TREES];
     u8 visible[TREE_VISIBLE_COUNT];
     u16 treeProj[MAX_TREES];
@@ -250,10 +265,10 @@ static void updateTrees(void)
     for (u8 i = 0; i < MAX_TREES; i++)
     {
         WTree* t = &trees[i];
-        if (t->z <= WORLD_Z_NEAR + GROUND_FORWARD_SPEED)
+        if (t->z <= WORLD_Z_NEAR + forwardStep)
             resetTree(t, i, WORLD_Z_FAR);
         else
-            t->z -= GROUND_FORWARD_SPEED;
+            t->z -= forwardStep;
         treeProj[i] = WORLD_proj(t->z);
         treeSizePx[i] = WORLD_sizePxq(treeProj[i]);
         sorted[i] = i;
@@ -283,10 +298,16 @@ static void updateTrees(void)
     for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
     {
         Sprite** sprs = treeNearSprs[i];
-        if (!sprs[TREE_HALF_LEFT] && !sprs[TREE_HALF_RIGHT]) continue;
+        Sprite* shadow = treeShadowSprs[i];
+        if (!sprs[TREE_HALF_LEFT] && !sprs[TREE_HALF_RIGHT])
+        {
+            SHADOW_hide(shadow);
+            continue;
+        }
         if (i >= visibleCount)
         {
             setTreePairVisibility(sprs, HIDDEN);
+            SHADOW_hide(shadow);
             continue;
         }
 
@@ -304,16 +325,23 @@ static void updateTrees(void)
                             WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
                                 - TREE_NEAR_CANVAS_H);
         setTreePairVisibility(sprs, VISIBLE);
+        SHADOW_place(shadow, t->wx - pwx, t->z, treeSizePx[idx]);
     }
 
     for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
     {
         Sprite** sprs = treeFarSprs[i];
         const u8 visibleIdx = TREE_NEAR_SPRITES + i;
-        if (!sprs[TREE_HALF_LEFT] && !sprs[TREE_HALF_RIGHT]) continue;
+        Sprite* shadow = treeShadowSprs[visibleIdx];
+        if (!sprs[TREE_HALF_LEFT] && !sprs[TREE_HALF_RIGHT])
+        {
+            SHADOW_hide(shadow);
+            continue;
+        }
         if (visibleIdx >= visibleCount)
         {
             setTreePairVisibility(sprs, HIDDEN);
+            SHADOW_hide(shadow);
             continue;
         }
 
@@ -331,6 +359,7 @@ static void updateTrees(void)
                             WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
                                 - TREE_FAR_CANVAS_H);
         setTreePairVisibility(sprs, VISIBLE);
+        SHADOW_place(shadow, t->wx - pwx, t->z, treeSizePx[idx]);
     }
 }
 
@@ -347,11 +376,12 @@ static void spawnObject(void)
         o->vramIndex = 0;
         o->sizeIdx = 0;
         for (u8 q = 0; q < 4; q++) o->sprs[q] = NULL;
+        o->shadow = SHADOW_add();
         o->wx = (s16) (random() % 281) - 140;
         o->wy = (random() & 1) ? 0 : (s16) (20 + (random() % 51));
         o->z  = WORLD_Z_FAR;
         o->vx = (s16) (random() % 5) - 2;
-        o->vz = WORLD_APPROACH_VZ_BASE + (random() & WORLD_APPROACH_VZ_RAND);
+        o->vz = WORLD_APPROACH_VZ_BASE + (random() % (WORLD_APPROACH_VZ_RAND + 1));
         refreshEnemyStep(o);
         renderer->spawn(o);
         return;
@@ -361,6 +391,8 @@ static void spawnObject(void)
 static void killObject(WObj* o)
 {
     renderer->despawn(o);
+    SHADOW_release(o->shadow);
+    o->shadow = NULL;
     o->active = FALSE;
 }
 
@@ -374,7 +406,7 @@ static void updateObjects(void)
         WObj* o = &objects[i];
         if (!o->active) continue;
 
-        o->wx += o->vx;
+        o->wx += o->vx * gFramesPerUpdate;
 
         const u16 stepVz = o->stepVz;
 
@@ -391,7 +423,10 @@ static void updateObjects(void)
         const u16 q = WORLD_proj(o->z);
         const s16 sx = WORLD_screenXq(o->wx, q);
         const s16 sy = WORLD_screenYBq(o->wy, q);
-        renderer->update(o, sx, sy, WORLD_sizePxq(q));
+        const u16 sizePx = WORLD_sizePxq(q);
+        renderer->update(o, sx, sy, sizePx);
+        if (o->sprs[0]) SHADOW_place(o->shadow, o->wx, o->z, sizePx);
+        else SHADOW_hide(o->shadow);
     }
 }
 
@@ -410,30 +445,35 @@ static void fireShot(void)
         s->z  = WORLD_Z_NEAR;
         s->spr = SPR_addSprite(&spr_shot, -16, -16,
                                TILE_ATTR(PAL2, 0, FALSE, FALSE));
+        s->shadow = SHADOW_add();
         return;
     }
 }
 
 static void killShot(WShot* s)
 {
-    SPR_releaseSprite(s->spr);
+    if (s->spr) SPR_releaseSprite(s->spr);
     s->spr = NULL;
+    SHADOW_release(s->shadow);
+    s->shadow = NULL;
     s->active = FALSE;
 }
 
 static void updateShots(void)
 {
+    const u16 step = WORLD_SHOT_SPEED * gFramesPerUpdate;
+
     for (u16 i = 0; i < MAX_SHOTS; i++)
     {
         WShot* s = &shots[i];
         if (!s->active) continue;
 
-        if (s->z >= WORLD_Z_FAR - WORLD_SHOT_SPEED)
+        if (s->z >= WORLD_Z_FAR - step)
         {
             killShot(s);
             continue;
         }
-        s->z += WORLD_SHOT_SPEED;
+        s->z += step;
 
         // Hit test against objects
         bool hit = FALSE;
@@ -458,9 +498,15 @@ static void updateShots(void)
         }
 
         const u16 q = WORLD_proj(s->z);
-        SPR_setPosition(s->spr,
-                        WORLD_screenXq(s->wx, q) - 4,
-                        WORLD_screenYBq(s->wy, q) - 8);
+        if (s->spr)
+            SPR_setPosition(s->spr,
+                            WORLD_screenXq(s->wx, q) - 4,
+                            WORLD_screenYBq(s->wy, q) - 8);
+
+        // Shot shadows are easy to disable if lower-scanline sprite budget
+        // gets tight during emulator testing.
+        if (s->spr) SHADOW_place(s->shadow, s->wx, s->z, SHOT_SHADOW_SIZE);
+        else SHADOW_hide(s->shadow);
     }
 }
 
@@ -483,11 +529,13 @@ static void setRenderer(const Renderer* r)
 
     renderer = r;
     renderer->init();
+    SHADOW_init();
 
     if (renderer == &RENDER_runtime && RUNTIME_slotCapacity() == 0)
     {
         renderer = &RENDER_stored;
         renderer->init();
+        SHADOW_init();
     }
     else if (renderer == &RENDER_runtime)
     {
@@ -500,6 +548,9 @@ static void setRenderer(const Renderer* r)
             else kept++;
         }
     }
+
+    gFramesPerUpdate = (renderer == &RENDER_runtime) ? 2 : 1;
+    refreshEnemySteps();
 
     for (u16 i = 0; i < MAX_OBJECTS; i++)
         if (objects[i].active) renderer->spawn(&objects[i]);
@@ -541,10 +592,11 @@ static void handleInput(void)
     if (pressed & BUTTON_X)
         fireShot();
 
-    if (joy & BUTTON_LEFT)  playerX -= playerSpeed;
-    if (joy & BUTTON_RIGHT) playerX += playerSpeed;
-    if (joy & BUTTON_UP)    playerY -= playerSpeed;
-    if (joy & BUTTON_DOWN)  playerY += playerSpeed;
+    const u16 moveStep = playerSpeed * gFramesPerUpdate;
+    if (joy & BUTTON_LEFT)  playerX -= moveStep;
+    if (joy & BUTTON_RIGHT) playerX += moveStep;
+    if (joy & BUTTON_UP)    playerY -= moveStep;
+    if (joy & BUTTON_DOWN)  playerY += moveStep;
 
     if (playerX < PLAYER_MIN_X) playerX = PLAYER_MIN_X;
     if (playerX > PLAYER_MAX_X) playerX = PLAYER_MAX_X;
@@ -558,16 +610,18 @@ int main(bool hardReset)
 {
     (void) hardReset;
 
-    // NTSC gives a clean 30 Hz game cadence by advancing once every two VBlanks.
-    // PAL still gets the taller 240-line mode, but runs at 25 Hz.
+    // Stored rendering advances every display frame; runtime rendering can opt
+    // into every-other-frame updates when switched in.
     VDP_setScreenWidth320();
     if (IS_PAL_SYSTEM) VDP_setScreenHeight240();
     JOY_setSupport(PORT_1, JOY_SUPPORT_6BTN);
 
     // Ground first: stabilises TILE_MAX_NUM, then reserve VRAM after the
-    // ground tileset for runtime scaling slots before the sprite pool exists.
+    // BG plane tiles for runtime scaling slots before the sprite pool exists.
     GROUND_init();
     SPR_initEx(RUNTIME_spriteVramBudget());
+    MOUNTAINS_init();
+    SHADOW_init();
 
     HUD_init();
 
@@ -582,12 +636,18 @@ int main(bool hardReset)
     player = SPR_addSprite(&spr_player, playerX, playerY,
                            TILE_ATTR(PAL1, 0, FALSE, FALSE));
     if (player) SPR_setDepth(player, PLAYER_DEPTH);
+    playerShadow = SHADOW_add();
     initTrees();
 
     renderer = &RENDER_stored;
+    gFramesPerUpdate = 1;
     renderer->init();
+    SHADOW_init();
 
     sky_init();
+    GROUND_update(playerX - PLAYER_CENTER_X, playerPitchY(), playerWorldX(), 0);
+    MOUNTAINS_update(playerX - PLAYER_CENTER_X,
+                     GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
     sky_setHorizon(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
     sky_vblank();
     SYS_setVIntCallback(sky_vblank);
@@ -602,12 +662,13 @@ int main(bool hardReset)
         {
             // Ground first: it sets GROUND_horizon, which the projection of
             // every object and shot below depends on.
-            const s16 pitchY = ((PLAYER_MIN_Y + playerMaxY) / 2) - playerY;
-            GROUND_update(playerX - PLAYER_CENTER_X, pitchY, playerWorldX(),
-                          GROUND_FORWARD_SPEED);
+            GROUND_update(playerX - PLAYER_CENTER_X, playerPitchY(), playerWorldX(),
+                          GROUND_FORWARD_SPEED * gFramesPerUpdate);
+            MOUNTAINS_update(playerX - PLAYER_CENTER_X,
+                             GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
             sky_setHorizon(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
 
-            spawnTimer++;
+            spawnTimer += gFramesPerUpdate;
             if (spawnTimer >= WORLD_SPAWN_INTERVAL)
             {
                 spawnTimer = 0;
@@ -621,7 +682,9 @@ int main(bool hardReset)
 
             if (hurtFlash)
             {
-                hurtFlash--;
+                hurtFlash = (hurtFlash > gFramesPerUpdate)
+                          ? (hurtFlash - gFramesPerUpdate)
+                          : 0;
                 if (player)
                     SPR_setVisibility(player, (hurtFlash & HURT_FLASH_PHASE)
                                                ? HIDDEN
@@ -635,11 +698,13 @@ int main(bool hardReset)
 
         HUD_update(renderer->name, countObjects, hits, enemySpeedPct);
 
+        SHADOW_place(playerShadow, playerWorldX(), WORLD_Z_NEAR, PLAYER_W);
         if (player) SPR_setPosition(player, playerX, playerY);
         SPR_update();
         // First VBlank: SGDK waits for VBlank start, then flushes DMA/services.
         SYS_doVBlankProcess();
-        VDP_waitVSync();   // Second VBlank: 60 Hz display, 30 Hz game/render.
+        for (u8 i = 1; i < gFramesPerUpdate; i++)
+            VDP_waitVSync();
     }
 
     return 0;

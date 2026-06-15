@@ -23,13 +23,15 @@
 #define WORLD_Z_NEAR    256
 #define WORLD_Z_FAR     4096
 
-// Game logic is locked to every other NTSC VBlank (30 Hz). Distances are
-// per-frame; intervals are in frames.
-#define GROUND_FORWARD_SPEED    22
-#define WORLD_APPROACH_VZ_BASE  97
-#define WORLD_APPROACH_VZ_RAND  53      // vz in [BASE, BASE + RAND]
-#define WORLD_SHOT_SPEED        440
-#define WORLD_SPAWN_INTERVAL    10
+extern const u16 WORLD_projLUT[];
+
+// World motion distances are per 60 Hz display frame. The main loop multiplies
+// them by its renderer cadence so 30 Hz runtime updates keep the same wall speed.
+#define GROUND_FORWARD_SPEED    11
+#define WORLD_APPROACH_VZ_BASE  48
+#define WORLD_APPROACH_VZ_RAND  26      // vz in [BASE, BASE + RAND]
+#define WORLD_SHOT_SPEED        220
+#define WORLD_SPAWN_INTERVAL    20
 
 // Ground plane depth offset: bottom of a ground object at z = Z_NEAR
 // sits at GROUND_horizon + GROUND_DEPTH pixels.
@@ -56,6 +58,7 @@ typedef struct WObj
     u16     stepVz;     // vz scaled by current enemy speed percentage
     u8      sizeIdx;    // current frame bucket / cached size (renderer data)
     Sprite* sprs[4];    // sprite-engine handles (renderer bookkeeping)
+    Sprite* shadow;     // ground contact shadow (owned by object lifetime)
     u16     vramIndex;  // VRAM tile slot (runtime renderer bookkeeping)
 } WObj;
 
@@ -66,6 +69,7 @@ typedef struct
     s16  wy;
     u16  z;
     Sprite* spr;
+    Sprite* shadow;
 } WShot;
 
 static inline s16 WORLD_screenX(s16 wx, u16 z)
@@ -75,7 +79,7 @@ static inline s16 WORLD_screenX(s16 wx, u16 z)
 
 static inline u16 WORLD_proj(u16 z)
 {
-    return (u16) (((u32) WORLD_Z_NEAR << 8) / z);
+    return WORLD_projLUT[z];
 }
 
 static inline s16 WORLD_screenXq(s16 wx, u16 q)

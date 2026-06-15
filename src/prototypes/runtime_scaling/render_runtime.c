@@ -47,6 +47,12 @@ static u8    candSize;
 
 #define RT_NO_SLOT  0xFF
 
+static u16 runtimeVramBase(void)
+{
+    return TILE_USER_INDEX + img_ground.tileset->numTile
+           + img_mountains.tileset->numTile;
+}
+
 static u8 allocSlot(void)
 {
     for (u8 i = 0; i < rtMaxSlots; i++)
@@ -77,8 +83,7 @@ u8 RUNTIME_slotCapacity(void)
 
 u16 RUNTIME_spriteVramBudget(void)
 {
-    const u16 rtEnd = TILE_USER_INDEX + img_ground.tileset->numTile
-                    + RT_RESERVED_TILES - 1;
+    const u16 rtEnd = runtimeVramBase() + RT_RESERVED_TILES - 1;
 
     if (rtEnd >= TILE_MAX_NUM) return 420;
 
@@ -175,10 +180,10 @@ static void rt_init(void)
 {
     PAL_setPalette(PAL2, spr_enemy_scaled_64.palette->data, DMA_QUEUE);
 
-    // Slots sit immediately after the ground tileset so DMA never clobbers
-    // floor tiles. Boot calls SPR_initEx(RUNTIME_spriteVramBudget()) so the
-    // sprite pool starts just above the last slot (no crash, no banding).
-    vramBase = TILE_USER_INDEX + img_ground.tileset->numTile;
+    // Slots sit immediately after the BG plane tiles so DMA never clobbers
+    // floor or mountain art. Boot calls SPR_initEx(RUNTIME_spriteVramBudget())
+    // so the sprite pool starts just above the last slot.
+    vramBase = runtimeVramBase();
 
     const u16 slotsEnd = vramBase + RT_RESERVED_TILES - 1;
     if (slotsEnd <= TILE_USER_MAX_INDEX)

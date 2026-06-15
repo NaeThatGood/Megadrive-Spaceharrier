@@ -51,6 +51,8 @@ src/prototypes/runtime_scaling/     68000 software-scaling renderer
 res/                                rescomp resources (sprites, audio, palettes)
 tools/gen_assets.py                 procedural placeholder art generator
 tools/gen_scale_frames.py           pre-rendered scale strip generator
+tools/gen_shadow.py                 shared ground-shadow strip generator
+tools/gen_proj_lut.py               world projection lookup-table generator
 tools/gen_voice.sh                  "Get ready!" sample synthesis (macOS)
 docs/                               technical documentation
 ```
@@ -178,6 +180,8 @@ on real hardware via an EverDrive-style flash cart.
 python3 -m venv tools/venv && tools/venv/bin/pip install pillow
 tools/venv/bin/python tools/gen_assets.py        # ground, player, enemy, shot
 tools/venv/bin/python tools/gen_scale_frames.py  # pre-rendered scale strip
+tools/venv/bin/python tools/gen_shadow.py        # shared ground-shadow strip
+tools/venv/bin/python tools/gen_proj_lut.py      # world projection lookup table
 tools/gen_voice.sh                               # "Get ready!" (macOS 'say')
 ```
 

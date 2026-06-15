@@ -12,11 +12,6 @@
 #define SKY_TRANSITION    40
 #define SKY_RAMP_SIZE     (SKY_H0 + SKY_SCREEN_H_MAX)
 
-// Stable hardware timing offset between the programmed band bottom and the
-// visible horizon. Keep this fixed: it trims the remaining constant gap without
-// reintroducing horizon-dependent HINT counter arming.
-#define SKY_BOTTOM_ADJUST 36
-
 // Fixed scanline of the first HINT each frame. The gradient band top can
 // never rise above ~line 40 (sky horizon min 80 - SKY_TRANSITION 40), so
 // we skip all scanlines above this with ZERO interrupts. 4-line margin
