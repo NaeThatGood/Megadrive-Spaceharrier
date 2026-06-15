@@ -97,10 +97,17 @@ static u16 countObjects(void)
     return n;
 }
 
-static u16 enemyStepVz(const WObj* o)
+static void refreshEnemyStep(WObj* o)
 {
     const u16 vz = (u16) ((((u32) o->vz * enemySpeedPct) + 50) / 100);
-    return (vz == 0) ? 1 : vz;
+    o->stepVz = (vz == 0) ? 1 : vz;
+}
+
+static void refreshEnemySteps(void)
+{
+    for (u16 i = 0; i < MAX_OBJECTS; i++)
+        if (objects[i].active)
+            refreshEnemyStep(&objects[i]);
 }
 
 static void setPlayerSpeedStep(u8 step)
@@ -197,6 +204,7 @@ static void updateTrees(void)
     const s16 pwx = playerWorldX();
     u8 sorted[MAX_TREES];
     u8 visible[TREE_VISIBLE_COUNT];
+    u16 treeProj[MAX_TREES];
     u16 treeSizePx[MAX_TREES];
     u8 visibleCount = 0;
 
@@ -207,7 +215,8 @@ static void updateTrees(void)
             resetTree(t, i, WORLD_Z_FAR);
         else
             t->z -= GROUND_FORWARD_SPEED;
-        treeSizePx[i] = WORLD_sizePx(t->z);
+        treeProj[i] = WORLD_proj(t->z);
+        treeSizePx[i] = WORLD_sizePxq(treeProj[i]);
         sorted[i] = i;
     }
 
@@ -242,16 +251,18 @@ static void updateTrees(void)
             continue;
         }
 
-        const WTree* t = &trees[visible[i]];
-        const u8 frame = treeSizeToFrame(treeSizePx[visible[i]]);
+        const u8 idx = visible[i];
+        const WTree* t = &trees[idx];
+        const u16 q = treeProj[idx];
+        const u8 frame = treeSizeToFrame(treeSizePx[idx]);
         if (frame != treeNearFrameIdx[i])
         {
             treeNearFrameIdx[i] = frame;
             SPR_setFrame(spr, frame);
         }
         SPR_setPosition(spr,
-                        WORLD_screenX(t->wx - pwx, t->z) - (TREE_FRAME_CANVAS_W / 2),
-                        WORLD_screenYBottom(0, t->z) + GROUND_VISIBLE_HORIZON_PAD
+                        WORLD_screenXq(t->wx - pwx, q) - (TREE_FRAME_CANVAS_W / 2),
+                        WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
                             - TREE_NEAR_CANVAS_H);
         SPR_setVisibility(spr, VISIBLE);
     }
@@ -267,16 +278,18 @@ static void updateTrees(void)
             continue;
         }
 
-        const WTree* t = &trees[visible[visibleIdx]];
-        const u8 frame = treeSizeToFrame(treeSizePx[visible[visibleIdx]]);
+        const u8 idx = visible[visibleIdx];
+        const WTree* t = &trees[idx];
+        const u16 q = treeProj[idx];
+        const u8 frame = treeSizeToFrame(treeSizePx[idx]);
         if (frame != treeFarFrameIdx[i])
         {
             treeFarFrameIdx[i] = frame;
             SPR_setFrame(spr, frame);
         }
         SPR_setPosition(spr,
-                        WORLD_screenX(t->wx - pwx, t->z) - (TREE_FRAME_CANVAS_W / 2),
-                        WORLD_screenYBottom(0, t->z) + GROUND_VISIBLE_HORIZON_PAD
+                        WORLD_screenXq(t->wx - pwx, q) - (TREE_FRAME_CANVAS_W / 2),
+                        WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD
                             - TREE_FAR_CANVAS_H);
         SPR_setVisibility(spr, VISIBLE);
     }
@@ -300,6 +313,7 @@ static void spawnObject(void)
         o->z  = WORLD_Z_FAR;
         o->vx = (s16) (random() % 5) - 2;
         o->vz = WORLD_APPROACH_VZ_BASE + (random() & WORLD_APPROACH_VZ_RAND);
+        refreshEnemyStep(o);
         renderer->spawn(o);
         return;
     }
@@ -323,7 +337,7 @@ static void updateObjects(void)
 
         o->wx += o->vx;
 
-        const u16 stepVz = enemyStepVz(o);
+        const u16 stepVz = o->stepVz;
 
         if (o->z <= WORLD_Z_NEAR + stepVz)
         {
@@ -335,9 +349,10 @@ static void updateObjects(void)
         }
         o->z -= stepVz;
 
-        const s16 sx = WORLD_screenX(o->wx, o->z);
-        const s16 sy = WORLD_screenYBottom(o->wy, o->z);
-        renderer->update(o, sx, sy, WORLD_sizePx(o->z));
+        const u16 q = WORLD_proj(o->z);
+        const s16 sx = WORLD_screenXq(o->wx, q);
+        const s16 sy = WORLD_screenYBq(o->wy, q);
+        renderer->update(o, sx, sy, WORLD_sizePxq(q));
     }
 }
 
@@ -403,9 +418,10 @@ static void updateShots(void)
             continue;
         }
 
+        const u16 q = WORLD_proj(s->z);
         SPR_setPosition(s->spr,
-                        WORLD_screenX(s->wx, s->z) - 4,
-                        WORLD_screenYBottom(s->wy, s->z) - 8);
+                        WORLD_screenXq(s->wx, q) - 4,
+                        WORLD_screenYBq(s->wy, q) - 8);
     }
 }
 
@@ -468,9 +484,15 @@ static void handleInput(void)
     if (paused) return;
 
     if ((pressed & BUTTON_A) && enemySpeedPct > ENEMY_SPEED_MIN)
+    {
         enemySpeedPct -= ENEMY_SPEED_STEP;
+        refreshEnemySteps();
+    }
     if ((pressed & BUTTON_B) && enemySpeedPct < ENEMY_SPEED_MAX)
+    {
         enemySpeedPct += ENEMY_SPEED_STEP;
+        refreshEnemySteps();
+    }
 
     if (pressed & BUTTON_Y)
         sky_setEnabled(!sky_isEnabled());
@@ -572,7 +594,7 @@ int main(bool hardReset)
             }
         }
 
-        HUD_update(renderer->name, countObjects(), hits, enemySpeedPct);
+        HUD_update(renderer->name, countObjects, hits, enemySpeedPct);
 
         if (player) SPR_setPosition(player, playerX, playerY);
         SPR_update();

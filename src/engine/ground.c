@@ -53,6 +53,9 @@ s16 GROUND_horizon;
 static s16 lineScroll[MAX_LINES];
 static u16 screenH;
 static u16 prevCheckerStartY;
+static s16 lastSwayX;
+static s16 lastB;
+static s16 lastHorizonY;
 static bool lineScrollValid;
 static u16 fwdAcc;                          // 8.8 fixed, 1.0 = quarter cell
 static u16 blendLD[4];                      // light -> dark, 4 sub-steps
@@ -139,6 +142,9 @@ void GROUND_init(void)
 
     memset(lineScroll, 0, sizeof(lineScroll));
     prevCheckerStartY = 0;
+    lastSwayX = 0;
+    lastB = 0;
+    lastHorizonY = 0;
     lineScrollValid = FALSE;
     GROUND_update(0, 0, 0, 0);
 }
@@ -155,6 +161,10 @@ void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
 
     const s16 horizonY = BOARD_HORIZON - vs;
     GROUND_horizon = horizonY;
+
+    if (lineScrollValid && swayX == lastSwayX && b == lastB &&
+        horizonY == lastHorizonY)
+        goto forwardAnim;
 
     s16 checkerStartY = horizonY + CHECKER_START_PAD;
     if (checkerStartY < 0) checkerStartY = 0;
@@ -194,8 +204,12 @@ void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
                                     screenH - uploadStartY, DMA_QUEUE);
     }
     prevCheckerStartY = startY;
+    lastSwayX = swayX;
+    lastB = b;
+    lastHorizonY = horizonY;
     lineScrollValid = TRUE;
 
+forwardAnim:
     // --- Forward motion: rotate the checker palette entries -------------
     fwdAcc += speed * 21;       // speed 22 ~= one checker cell every 5 frames @ 30 Hz
 

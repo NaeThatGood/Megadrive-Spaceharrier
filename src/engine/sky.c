@@ -11,9 +11,10 @@ const SkyKeyframe SKY_KEYFRAMES[SKY_KEYFRAME_COUNT] =
 
 static u16 ramp[SKY_RAMP_SIZE];
 static s16 horizonY;
+static u16 skyBandStart;
 static const u16* skyReadPtr;
 static vu16 skyLinesLeft;       // scanlines the HINT should still fire this frame
-static vu16 skySkipLines;       // flat top lines before the transition band
+static volatile bool skyDensePending;  // switch to per-line HINTs after first band line
 static vu16 skyResetLine;       // restore backdrop colour just below horizon
 static bool enabled;
 
@@ -57,17 +58,40 @@ static u16 keyframeColor(s16 d)
                     SKY_KEYFRAMES[SKY_KEYFRAME_COUNT - 1].b);
 }
 
+static u16 bandStartForHorizon(s16 h)
+{
+    s16 start = h - SKY_TRANSITION;
+    return (start > 0) ? (u16) start : 0;
+}
+
+static void armHintForBandStart(void)
+{
+    // Mega Drive HINT counters fire every counter+1 lines. If the band edge
+    // is one scanline off in-emulator, nudge skyBandStart - 1 by +/-1; because
+    // this is recomputed from the live horizon outside VInt, it will not drift.
+    if (skyBandStart > 0)
+    {
+        VDP_setHIntCounter((u8) (skyBandStart - 1));
+        skyDensePending = TRUE;
+    }
+    else
+    {
+        VDP_setHIntCounter(0);
+        skyDensePending = FALSE;
+    }
+}
+
 // Keep this minimal: it runs once per scanline near HBlank.
 HINTERRUPT_CALLBACK sky_hint(void)
 {
-    if (skySkipLines)
-    {
-        skySkipLines--;
-        return;
-    }
-
     *((vu32*) VDP_CTRL_PORT) = 0xC0000000UL | ((u32) (SKY_CRAM_INDEX * 2) << 16);
     *((vu16*) VDP_DATA_PORT) = *skyReadPtr++;
+
+    if (skyDensePending)
+    {
+        skyDensePending = FALSE;
+        VDP_setHIntCounter(0);
+    }
 
     if (skyLinesLeft)
     {
@@ -90,9 +114,10 @@ void sky_init(void)
         ramp[i] = keyframeColor((s16) SKY_H0 - (s16) i);
 
     horizonY = 0;
+    skyBandStart = 0;
     skyReadPtr = &ramp[SKY_H0];
     skyLinesLeft = 1;
-    skySkipLines = 0;
+    skyDensePending = FALSE;
     skyResetLine = FALSE;
     enabled = TRUE;
 
@@ -106,6 +131,8 @@ void sky_setEnabled(bool value)
     enabled = value;
     if (!enabled)
         VDP_setHInterrupt(FALSE);
+    else
+        armHintForBandStart();
 }
 
 bool sky_isEnabled(void)
@@ -118,6 +145,9 @@ void sky_setHorizon(s16 y)
     if (y < 0) y = 0;
     if (y > SKY_H0) y = SKY_H0;
     horizonY = y;
+    skyBandStart = bandStartForHorizon(y);
+    if (enabled)
+        armHintForBandStart();
 }
 
 void sky_vblank(void)
@@ -134,8 +164,7 @@ void sky_vblank(void)
     if (h < 0) h = 0;
     if (h > SKY_H0) h = SKY_H0;
 
-    s16 start = h - SKY_TRANSITION;
-    if (start < 0) start = 0;
+    const u16 start = skyBandStart;
 
     const u16 startIndex = (u16) (SKY_H0 - h + start);
 
@@ -146,9 +175,8 @@ void sky_vblank(void)
 
     skyReadPtr = &ramp[startIndex];
     skyLinesLeft = (u16) (h - start + 1);
-    skySkipLines = (u16) start;
     skyResetLine = (((u16) h + 1) < SKY_SCREEN_H_MAX) ? TRUE : FALSE;
-    VDP_setHIntCounter(0);
+    skyDensePending = (start > 0) ? TRUE : FALSE;
 
     VDP_setHInterrupt(TRUE);        // re-arm for the new frame
 }

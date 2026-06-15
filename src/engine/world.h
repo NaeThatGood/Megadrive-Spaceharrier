@@ -53,6 +53,7 @@ typedef struct WObj
     u16     z;
     s16     vx;
     u16     vz;         // approach speed (subtracted from z each frame)
+    u16     stepVz;     // vz scaled by current enemy speed percentage
     u8      sizeIdx;    // current frame bucket / cached size (renderer data)
     Sprite* sprs[4];    // sprite-engine handles (renderer bookkeeping)
     u16     vramIndex;  // VRAM tile slot (runtime renderer bookkeeping)
@@ -72,15 +73,36 @@ static inline s16 WORLD_screenX(s16 wx, u16 z)
     return 160 + (s16) (((s32) wx * WORLD_Z_NEAR) / z);
 }
 
+static inline u16 WORLD_proj(u16 z)
+{
+    return (u16) (((u32) WORLD_Z_NEAR << 8) / z);
+}
+
+static inline s16 WORLD_screenXq(s16 wx, u16 q)
+{
+    return 160 + (s16) (((s32) wx * q) >> 8);
+}
+
 static inline s16 WORLD_screenYBottom(s16 wy, u16 z)
 {
     return GROUND_horizon +
         (s16) (((s32) (WORLD_GROUND_DEPTH - wy) * WORLD_Z_NEAR) / z);
 }
 
+static inline s16 WORLD_screenYBq(s16 wy, u16 q)
+{
+    return GROUND_horizon +
+        (s16) (((s32) (WORLD_GROUND_DEPTH - wy) * q) >> 8);
+}
+
 static inline u16 WORLD_sizePx(u16 z)
 {
     return (u16) (((u32) OBJ_BASE_SIZE * WORLD_Z_NEAR) / z);
+}
+
+static inline u16 WORLD_sizePxq(u16 q)
+{
+    return q >> 2;
 }
 
 // --- Renderer interface: implemented by each prototype ----------------------

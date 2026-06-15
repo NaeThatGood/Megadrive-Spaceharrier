@@ -14,7 +14,8 @@ void HUD_init(void)
     frameCnt = 0;
 }
 
-void HUD_update(const char* modeName, u16 objCount, u16 hits, u16 enemySpeedPct)
+void HUD_update(const char* modeName, u16 (*countObjects)(void), u16 hits,
+                u16 enemySpeedPct)
 {
     // SYS_getFPS must be sampled every frame: it counts its own invocations
     const u16 fps = (u16) SYS_getFPS();
@@ -23,6 +24,7 @@ void HUD_update(const char* modeName, u16 objCount, u16 hits, u16 enemySpeedPct)
     if ((frameCnt & 7) != 0) return;
 
     char line[41];
+    const u16 objCount = countObjects();
 
     sprintf(line, "%s OBJ:%2u CPU:%3u%% FPS:%2u  ",
             modeName, objCount, SYS_getCPULoad(), fps);
