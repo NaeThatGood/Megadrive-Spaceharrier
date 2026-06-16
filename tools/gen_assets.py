@@ -5,6 +5,9 @@ Ground plane checkerboard is procedural. Outputs indexed PNGs for SGDK rescomp.
 
 Outputs:
   res/sprites/ground_left.png  192x352 left half of mirrored checkerboard (PAL0)
+  res/sprites/sky_gradient.png 8x160 horizon-pinned sky tile column (PAL3)
+  res/sprites/sky_gradient_up35.png 8x160 sky column scrolled up by 35 px
+  res/sprites/cloud_quarters.png 48x8 quarter-cloud sheet for BG_A/sprites (PAL2)
   res/sprites/player.png       32x48 player character sprite sheet, 1 frame (PAL1)
   res/sprites/tree_src.png     64x240 tree master sprite for pre-rendered scaling
 """
@@ -21,6 +24,10 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 from rip_player_x68 import rip as rip_player
 
 SCREEN_W, SCREEN_H = 320, 240  # PAL H40/V30
+GROUND_HORIZON = 96
+PITCH_RANGE = 64
+BOARD_PAD_TOP = PITCH_RANGE
+BOARD_HORIZON = GROUND_HORIZON + BOARD_PAD_TOP
 
 
 def make_palette(colors):
@@ -52,9 +59,8 @@ def gen_ground():
       7..14  checker phase entries (SH2 blues; rotated at runtime)
       15     white (HUD text)
     """
-    HORIZON_ONSCREEN = 96
-    PITCH_RANGE = 64
-    PAD_TOP = PITCH_RANGE
+    HORIZON_ONSCREEN = GROUND_HORIZON
+    PAD_TOP = BOARD_PAD_TOP
     PAD_BOTTOM = PITCH_RANGE
     BOARD_W = 384
     IMG_W = BOARD_W // 2
@@ -134,6 +140,125 @@ def gen_ground():
 
     img.save(os.path.join(SPRITES, "ground_left.png"))
     print("wrote ground_left.png")
+
+
+def gen_sky_gradient():
+    """8xBOARD_HORIZON sky column using free PAL3 tree entries.
+
+    The tilemap repeats this single column across BG_B. The ordered dither is
+    8px-periodic horizontally so every repeated tile joins cleanly.
+    """
+    W, H = 8, BOARD_HORIZON
+    stop_indices = [12, 13, 14, 15, 5, 4]
+    stop_colors = [
+        (0x2A, 0x4B, 0x8D),
+        (0x3A, 0x63, 0xB0),
+        (0x4E, 0x80, 0xCC),
+        (0x6C, 0xA0, 0xE0),
+        (0x97, 0xC2, 0xEE),
+        (0xC2, 0xE0, 0xF5),
+    ]
+    bayer8 = [
+        [0, 48, 12, 60, 3, 51, 15, 63],
+        [32, 16, 44, 28, 35, 19, 47, 31],
+        [8, 56, 4, 52, 11, 59, 7, 55],
+        [40, 24, 36, 20, 43, 27, 39, 23],
+        [2, 50, 14, 62, 1, 49, 13, 61],
+        [34, 18, 46, 30, 33, 17, 45, 29],
+        [10, 58, 6, 54, 9, 57, 5, 53],
+        [42, 26, 38, 22, 41, 25, 37, 21],
+    ]
+
+    colors = [(0, 0, 0)] * 16
+    for idx, color in zip(stop_indices, stop_colors):
+        colors[idx] = color
+
+    img = Image.new("P", (W, H), stop_indices[0])
+    img.putpalette(make_palette(colors))
+    px = img.load()
+
+    for y in range(H):
+        pos = (y * (len(stop_indices) - 1)) / (H - 1)
+        base = int(math.floor(pos))
+        if base >= len(stop_indices) - 1:
+            for x in range(W):
+                px[x, y] = stop_indices[-1]
+            continue
+
+        frac = pos - base
+        for x in range(W):
+            threshold = (bayer8[y & 7][x & 7] + 0.5) / 64.0
+            px[x, y] = stop_indices[base + 1] if frac >= threshold else stop_indices[base]
+
+    img.save(os.path.join(SPRITES, "sky_gradient.png"))
+    print("wrote sky_gradient.png")
+
+    shifted = Image.new("P", (W, H), stop_indices[0])
+    shifted.putpalette(make_palette(colors))
+    shifted_px = shifted.load()
+
+    for y in range(H):
+        src_y = y + 35
+        if src_y >= H:
+            src_y = H - 1
+        for x in range(W):
+            shifted_px[x, y] = px[x, src_y]
+
+    shifted.save(os.path.join(SPRITES, "sky_gradient_up35.png"))
+    print("wrote sky_gradient_up35.png")
+
+
+def gen_clouds():
+    """Three 16x8 top-left cloud quarters, using only PAL2 indices 12..15."""
+    QUARTER_W, QUARTER_H = 16, 8
+    VARIANTS = 3
+    W, H = QUARTER_W * VARIANTS, QUARTER_H
+    colors = [(0, 0, 0)] * 16
+    colors[12] = (0x30, 0x38, 0x48)   # shadow underside
+    colors[13] = (0x70, 0x78, 0x88)   # mid
+    colors[14] = (0xB0, 0xB8, 0xC8)   # light
+    colors[15] = (0xF0, 0xF4, 0xFF)   # white top
+
+    img = Image.new("P", (W, H), 0)
+    img.putpalette(make_palette(colors))
+    d = ImageDraw.Draw(img)
+
+    def quarter(ox, scale, lift=0):
+        """Draw one mirror-friendly top-left quarter.
+
+        Shapes intentionally cross the right/bottom edges; H/V flipped tilemap
+        quadrants complete them without a hard empty seam.
+        """
+        parts = [
+            (12, [(-2, 5, 17, 9), (5, 6, 21, 10)]),
+            (13, [(-3, 4, 11, 9), (4, 2, 18, 9), (10, 4, 21, 9)]),
+            (14, [(0, 2, 10, 7), (6, 0, 17, 7)]),
+            (15, [(4, 0, 10, 4), (8, -1, 16, 4)]),
+        ]
+        for fill, ellipses in parts:
+            for x0, y0, x1, y1 in ellipses:
+                box = [
+                    int(ox + x0 * scale), int((y0 + lift) * scale),
+                    int(ox + x1 * scale), int((y1 + lift) * scale),
+                ]
+                d.ellipse(box, fill=fill)
+
+        # Flatten the underside slightly so the mirrored cloud has weight.
+        d.rectangle([
+            int(ox + 1 * scale), int((6 + lift) * scale),
+            int(ox + 16 * scale), int((7 + lift) * scale),
+        ], fill=12)
+        d.line([
+            (int(ox + 5 * scale), int((5 + lift) * scale)),
+            (int(ox + 15 * scale), int((5 + lift) * scale)),
+        ], fill=13, width=max(1, int(scale * 2)))
+
+    quarter(0, 1.00, 0)
+    quarter(QUARTER_W, 0.88, 1)
+    quarter(QUARTER_W * 2, 1.08, -1)
+
+    img.save(os.path.join(SPRITES, "cloud_quarters.png"))
+    print("wrote cloud_quarters.png")
 
 
 def gen_player():
@@ -292,34 +417,6 @@ def gen_tree():
     print("wrote tree_src.png")
 
 
-def gen_runtime_assets():
-    """Assets for the runtime-scaling renderer.
-
-    enemy_src.bin: the 64x64 master sprite as packed 4bpp (2 px/byte,
-    high nibble = left pixel), row-major. Read directly by the 68000
-    software scaler.
-
-    quad32.png: fully opaque 32x32 dummy sprite. Compiled with
-    OPTIMIZATION NONE it yields exactly one 32x32 hardware sprite whose
-    16 tiles we overwrite at runtime with scaled data (its ROM tiles are
-    never uploaded).
-    """
-    src = Image.open(os.path.join(SPRITES, "enemy_src.png"))
-    w, h = src.size
-    data = bytearray()
-    pix = src.load()
-    for y in range(h):
-        for x in range(0, w, 2):
-            data.append(((pix[x, y] & 0xF) << 4) | (pix[x + 1, y] & 0xF))
-    with open(os.path.join(SPRITES, "enemy_src.bin"), "wb") as f:
-        f.write(data)
-
-    quad = Image.new("P", (32, 32), 1)
-    quad.putpalette(make_palette(ENEMY_PALETTE))
-    quad.save(os.path.join(SPRITES, "quad32.png"))
-    print(f"wrote enemy_src.bin ({len(data)} bytes), quad32.png")
-
-
 def gen_shot():
     img = Image.new("P", (8, 8), 0)
     img.putpalette(make_palette(ENEMY_PALETTE))
@@ -334,8 +431,9 @@ def gen_shot():
 if __name__ == "__main__":
     os.makedirs(SPRITES, exist_ok=True)
     gen_ground()
+    gen_sky_gradient()
+    gen_clouds()
     gen_player()
     gen_enemy()
     gen_tree()
-    gen_runtime_assets()
     gen_shot()

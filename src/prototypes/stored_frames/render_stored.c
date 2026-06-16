@@ -1,5 +1,6 @@
 #include <genesis.h>
 #include "resources.h"
+#include "../../engine/clouds.h"
 #include "../../engine/world.h"
 
 // Stored-frame renderer.
@@ -12,6 +13,7 @@
 #define FRAME_MAX_SIZE  64
 #define TIER_COUNT      3
 #define TIER_NONE       0xFFFF
+#define SCREEN_W        320
 
 static const u8 FRAME_SIZES[FRAME_COUNT] =
 {
@@ -37,6 +39,10 @@ static const FrameTier FRAME_TIERS[TIER_COUNT] =
 };
 
 static u8 frameForSize[FRAME_MAX_SIZE + 1];
+static Sprite* objLeft[MAX_OBJECTS][TIER_COUNT];
+static Sprite* objRight[MAX_OBJECTS][TIER_COUNT];
+static bool poolBuilt;
+static s16 screenH;
 
 static void initFrameLut(void)
 {
@@ -71,6 +77,59 @@ static u8 frameToTier(u8 frame)
     return 2;
 }
 
+static void hidePair(u8 slot, u8 tier)
+{
+    if (objLeft[slot][tier])
+        SPR_setVisibility(objLeft[slot][tier], HIDDEN);
+    if (objRight[slot][tier])
+        SPR_setVisibility(objRight[slot][tier], HIDDEN);
+}
+
+static void setPairVisibility(u8 slot, u8 tier, SpriteVisibility visibility)
+{
+    if (objLeft[slot][tier])
+        SPR_setVisibility(objLeft[slot][tier], visibility);
+    if (objRight[slot][tier])
+        SPR_setVisibility(objRight[slot][tier], visibility);
+}
+
+static bool pairReady(u8 slot, u8 tier)
+{
+    return objLeft[slot][tier] && objRight[slot][tier];
+}
+
+static void buildObjectPool(void)
+{
+    if (poolBuilt) return;
+
+    for (u8 slot = 0; slot < MAX_OBJECTS; slot++)
+    {
+        for (u8 tier = 0; tier < TIER_COUNT; tier++)
+        {
+            const SpriteDefinition* def = FRAME_TIERS[tier].def;
+
+            objLeft[slot][tier] = SPR_addSprite(def, -128, -128,
+                                                TILE_ATTR(PAL2, 0, FALSE, FALSE));
+            objRight[slot][tier] = NULL;
+
+            if (objLeft[slot][tier])
+            {
+                const u16 sharedTile = objLeft[slot][tier]->attribut & ~TILE_ATTR_MASK;
+                objRight[slot][tier] =
+                    SPR_addSpriteEx(def, -128, -128,
+                                    TILE_ATTR_FULL(PAL2, 0, FALSE, TRUE, sharedTile),
+                                    0);
+            }
+
+            hidePair(slot, tier);
+            if (!pairReady(slot, tier))
+                SYS_die("stored enemy pool allocation failed");
+        }
+    }
+
+    poolBuilt = TRUE;
+}
+
 static void setStoredFrame(WObj* o, u8 frame)
 {
     const u8 tierIdx = frameToTier(frame);
@@ -78,55 +137,27 @@ static void setStoredFrame(WObj* o, u8 frame)
 
     if (o->vramIndex != tierIdx)
     {
-        if (o->sprs[0])
-        {
-            SPR_releaseSprite(o->sprs[0]);
-            o->sprs[0] = NULL;
-        }
-        if (o->sprs[1])
-        {
-            SPR_releaseSprite(o->sprs[1]);
-            o->sprs[1] = NULL;
-        }
+        if (o->vramIndex != TIER_NONE)
+            hidePair(o->slot, (u8) o->vramIndex);
 
-        o->sprs[0] = SPR_addSprite(tier->def, -128, -128,
-                                   TILE_ATTR(PAL2, 0, FALSE, FALSE));
-        if (o->sprs[0])
+        if (pairReady(o->slot, tierIdx))
         {
-            const u16 sharedTile = o->sprs[0]->attribut & ~TILE_ATTR_MASK;
-            o->sprs[1] =
-                SPR_addSpriteEx(tier->def, -128, -128,
-                                TILE_ATTR_FULL(PAL2, 0, FALSE, TRUE, sharedTile),
-                                0);
-        }
-
-        if (!o->sprs[0] || !o->sprs[1])
-        {
-            if (o->sprs[0])
-            {
-                SPR_releaseSprite(o->sprs[0]);
-                o->sprs[0] = NULL;
-            }
-            if (o->sprs[1])
-            {
-                SPR_releaseSprite(o->sprs[1]);
-                o->sprs[1] = NULL;
-            }
-            o->vramIndex = TIER_NONE;
+            o->vramIndex = tierIdx;
+            setPairVisibility(o->slot, tierIdx, VISIBLE);
         }
         else
         {
-            o->vramIndex = tierIdx;
+            o->vramIndex = TIER_NONE;
         }
         o->sizeIdx = 0xFF;
     }
 
-    if (o->sprs[0] && o->sprs[1] && frame != o->sizeIdx)
+    if (pairReady(o->slot, tierIdx) && frame != o->sizeIdx)
     {
         const u8 tierFrame = frame - tier->firstFrame;
         o->sizeIdx = frame;
-        SPR_setFrame(o->sprs[0], tierFrame);
-        SPR_setFrame(o->sprs[1], tierFrame);
+        SPR_setFrame(objLeft[o->slot][tierIdx], tierFrame);
+        SPR_setFrame(objRight[o->slot][tierIdx], tierFrame);
     }
 }
 
@@ -134,12 +165,13 @@ static void st_init(void)
 {
     initFrameLut();
     PAL_setPalette(PAL2, spr_enemy_scaled_64.palette->data, DMA_QUEUE);
+    CLOUDS_applyPalette();
+    screenH = VDP_getScreenHeight();
+    buildObjectPool();
 }
 
 static void st_spawn(WObj* o)
 {
-    o->sprs[0] = NULL;
-    o->sprs[1] = NULL;
     o->vramIndex = TIER_NONE;
     o->sizeIdx = 0xFF;
     setStoredFrame(o, 0);
@@ -151,28 +183,55 @@ static void st_update(WObj* o, s16 sx, s16 syBottom, u16 sizePx)
     if (frame != o->sizeIdx)
         setStoredFrame(o, frame);
 
-    if (o->sprs[0] && o->sprs[1] && o->vramIndex != TIER_NONE)
+    if (o->vramIndex != TIER_NONE && pairReady(o->slot, (u8) o->vramIndex))
     {
-        const u8 canvasPx = FRAME_TIERS[o->vramIndex].canvasPx;
+        const u8 tier = (u8) o->vramIndex;
+        const u8 canvasPx = FRAME_TIERS[tier].canvasPx;
         const u8 halfPx = canvasPx / 2;
         const s16 x = sx - (canvasPx / 2);
         const s16 y = syBottom - canvasPx;
-        SPR_setPosition(o->sprs[0], x, y);
-        SPR_setPosition(o->sprs[1], x + halfPx, y);
+        if (x <= -(s16) canvasPx || x >= SCREEN_W ||
+            y <= -(s16) canvasPx || y >= screenH)
+        {
+            hidePair(o->slot, tier);
+            return;
+        }
+
+        SPR_setPosition(objLeft[o->slot][tier], x, y);
+        SPR_setPosition(objRight[o->slot][tier], x + halfPx, y);
+        setPairVisibility(o->slot, tier, VISIBLE);
     }
 }
 
 static void st_despawn(WObj* o)
 {
-    for (u8 q = 0; q < 4; q++)
+    for (u8 tier = 0; tier < TIER_COUNT; tier++)
+        hidePair(o->slot, tier);
+    o->vramIndex = TIER_NONE;
+}
+
+void RENDER_storedRelease(void)
+{
+    if (!poolBuilt) return;
+
+    for (u8 slot = 0; slot < MAX_OBJECTS; slot++)
     {
-        if (o->sprs[q])
+        for (u8 tier = 0; tier < TIER_COUNT; tier++)
         {
-            SPR_releaseSprite(o->sprs[q]);
-            o->sprs[q] = NULL;
+            if (objRight[slot][tier])
+            {
+                SPR_releaseSprite(objRight[slot][tier]);
+                objRight[slot][tier] = NULL;
+            }
+            if (objLeft[slot][tier])
+            {
+                SPR_releaseSprite(objLeft[slot][tier]);
+                objLeft[slot][tier] = NULL;
+            }
         }
     }
-    o->vramIndex = 0;
+
+    poolBuilt = FALSE;
 }
 
 const Renderer RENDER_stored =

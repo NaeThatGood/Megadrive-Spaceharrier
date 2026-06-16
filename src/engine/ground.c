@@ -1,5 +1,6 @@
 #include "ground.h"
 #include "resources.h"
+#include "vram_layout.h"
 
 // Perspective ground using the techniques of the original Mega Drive
 // pseudo-3D floors:
@@ -45,10 +46,24 @@
 // Checker palette entries (PAL0 indices 7..14, see gen_assets.py)
 #define CHECKER_PAL_BASE   7
 #define CHECKER_ENTRIES    8
-#define COL_LIGHT          RGB24_TO_VDPCOLOR(0x6098D8)
-#define COL_DARK           RGB24_TO_VDPCOLOR(0x204090)
+
+typedef struct
+{
+    u16 light;
+    u16 dark;
+} CheckerColors;
+
+static const CheckerColors STAGE_CHECKER[] =
+{
+    { RGB24_TO_VDPCOLOR(0x6098D8), RGB24_TO_VDPCOLOR(0x204090) }, // 0: blue (current)
+    { RGB24_TO_VDPCOLOR(0x60C060), RGB24_TO_VDPCOLOR(0x206020) }, // 1: green
+    { RGB24_TO_VDPCOLOR(0xD89060), RGB24_TO_VDPCOLOR(0x903020) }, // 2: amber/desert
+    // add more stages here
+};
+#define STAGE_CHECKER_COUNT  (sizeof(STAGE_CHECKER) / sizeof(STAGE_CHECKER[0]))
 
 s16 GROUND_horizon;
+s16 GROUND_visibleBottom;
 
 static s16 lineScroll[MAX_LINES];
 static u16 screenH;
@@ -58,10 +73,13 @@ static s16 lastB;
 static s16 lastHorizonY;
 static bool lineScrollValid;
 static u16 fwdAcc;                          // 8.8 fixed, 1.0 = quarter cell
+static u16 colLight;
+static u16 colDark;
 static u16 blendLD[4];                      // light -> dark, 4 sub-steps
 static u16 blendDL[4];                      // dark -> light, 4 sub-steps
 static u16 checkerCols[CHECKER_ENTRIES];
 static u16 groundRow[BOARD_TILES_W];
+static u16 skyTileBase;
 
 static s16 clampHScroll(s16 scroll)
 {
@@ -83,13 +101,58 @@ static u16 lerpColor(u16 a, u16 b, u16 num)
     return out;
 }
 
+static void rebuildCheckerBlends(void)
+{
+    for (u16 s = 0; s < 4; s++)
+    {
+        blendLD[s] = lerpColor(colLight, colDark, s);
+        blendDL[s] = lerpColor(colDark, colLight, s);
+    }
+}
+
+static void buildCheckerCols(void)
+{
+    const u16 tQ = (fwdAcc >> 8) & 7;      // quarter-band counter
+    const u16 sub = (fwdAcc >> 6) & 3;     // blend sub-step within a band
+    for (u16 j = 0; j < CHECKER_ENTRIES; j++)
+    {
+        const u16 q = (j + tQ) & 7;
+        checkerCols[j] = (q < 3) ? colLight
+                       : (q == 3) ? blendLD[sub]
+                       : (q < 7) ? colDark
+                                 : blendDL[sub];
+    }
+}
+
+static void drawSkyRows(void)
+{
+    const u16 skyRows = BOARD_HORIZON / 8;
+
+    for (u16 y = 0; y < skyRows; y++)
+    {
+        const u16 skyTile = TILE_ATTR_FULL(PAL3, FALSE, FALSE, FALSE,
+                                           skyTileBase + y);
+        for (u16 x = 0; x < BOARD_TILES_W; x++)
+            groundRow[x] = skyTile;
+
+        VDP_setTileMapDataRectEx(BG_B, groundRow, 0,
+                                  0, y, BOARD_TILES_W, 1, BOARD_TILES_W,
+                                  CPU);
+    }
+}
+
 static void drawMirroredGround(void)
 {
     TileMap* unpacked = NULL;
     const TileMap* tm = img_ground.tilemap;
-    const u16 base = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, TILE_USER_INDEX);
+    const u16 groundBase = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE,
+                                          VRAM_GROUND_TILE_INDEX);
+    const u16 skyRows = BOARD_HORIZON / 8;
 
-    VDP_loadTileSet(img_ground.tileset, TILE_USER_INDEX, DMA);
+    VDP_loadTileSet(img_ground.tileset, VRAM_GROUND_TILE_INDEX, DMA);
+    VDP_loadTileSet(img_sky.tileset, VRAM_SKY_TILE_INDEX, DMA);
+    VDP_loadTileSet(img_sky_up35.tileset, VRAM_SKY_UP35_TILE_INDEX, DMA);
+    drawSkyRows();
 
     if (tm->compression != COMPRESSION_NONE)
     {
@@ -106,13 +169,18 @@ static void drawMirroredGround(void)
     {
         const u16* src = tm->tilemap + y * BOARD_HALF_TILES_W;
 
+        if (y < skyRows)
+        {
+            continue;
+        }
+
         for (u16 x = 0; x < BOARD_HALF_TILES_W; x++)
             groundRow[x] = src[x];
 
         for (u16 x = 0; x < BOARD_HALF_TILES_W; x++)
             groundRow[BOARD_TILES_W - 1 - x] = src[x] ^ TILE_ATTR_HFLIP_MASK;
 
-        VDP_setTileMapDataRectEx(BG_B, groundRow, base,
+        VDP_setTileMapDataRectEx(BG_B, groundRow, groundBase,
                                   0, y, BOARD_TILES_W, 1, BOARD_TILES_W,
                                   CPU);
     }
@@ -126,13 +194,12 @@ void GROUND_init(void)
 
     screenH = VDP_getScreenHeight();
     GROUND_horizon = GROUND_HORIZON;
+    GROUND_visibleBottom = screenH;
+    skyTileBase = VRAM_SKY_TILE_INDEX;
     fwdAcc = 0;
-
-    for (u16 s = 0; s < 4; s++)
-    {
-        blendLD[s] = lerpColor(COL_LIGHT, COL_DARK, s);
-        blendDL[s] = lerpColor(COL_DARK, COL_LIGHT, s);
-    }
+    colLight = STAGE_CHECKER[0].light;
+    colDark = STAGE_CHECKER[0].dark;
+    rebuildCheckerBlends();
 
     VDP_setScrollingMode(HSCROLL_LINE, VSCROLL_PLANE);
 
@@ -146,10 +213,41 @@ void GROUND_init(void)
     lastB = 0;
     lastHorizonY = 0;
     lineScrollValid = FALSE;
-    GROUND_update(0, 0, 0, 0);
+    GROUND_update(0, 0, 0, 0, TRUE);
 }
 
-void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
+void GROUND_setCheckerColors(u16 light, u16 dark)
+{
+    colLight = light;
+    colDark = dark;
+    rebuildCheckerBlends();
+}
+
+void GROUND_setSkyScrollOffset(u16 offsetPx)
+{
+    const u16 nextSkyTileBase =
+        (offsetPx == GROUND_SKY_SCROLL_UP_PX) ? VRAM_SKY_UP35_TILE_INDEX
+                                             : VRAM_SKY_TILE_INDEX;
+
+    if (skyTileBase == nextSkyTileBase)
+        return;
+
+    skyTileBase = nextSkyTileBase;
+    drawSkyRows();
+}
+
+void GROUND_setStagePalette(u16 stageIndex)
+{
+    const CheckerColors* colors =
+        &STAGE_CHECKER[stageIndex % STAGE_CHECKER_COUNT];
+
+    GROUND_setCheckerColors(colors->light, colors->dark);
+    buildCheckerCols();
+    PAL_setColors(CHECKER_PAL_BASE, checkerCols, CHECKER_ENTRIES, DMA_QUEUE);
+}
+
+void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed,
+                   bool rebuildScroll)
 {
     // --- Vertical pitch: scroll the tall board to move the horizon --------
     s16 vs = BOARD_PAD_TOP + ((pitchY * PITCH_RANGE) >> 7);
@@ -161,9 +259,15 @@ void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed)
 
     const s16 horizonY = BOARD_HORIZON - vs;
     GROUND_horizon = horizonY;
+    GROUND_visibleBottom = BOARD_H - vs;
+    if (GROUND_visibleBottom < 0) GROUND_visibleBottom = 0;
+    if (GROUND_visibleBottom > (s16) screenH) GROUND_visibleBottom = (s16) screenH;
 
     if (lineScrollValid && swayX == lastSwayX && b == lastB &&
         horizonY == lastHorizonY)
+        goto forwardAnim;
+
+    if (!rebuildScroll)
         goto forwardAnim;
 
     s16 checkerStartY = horizonY + CHECKER_START_PAD;
@@ -213,15 +317,6 @@ forwardAnim:
     // --- Forward motion: rotate the checker palette entries -------------
     fwdAcc += speed * 21;       // speed 22 ~= one checker cell every 5 frames @ 30 Hz
 
-    const u16 tQ = (fwdAcc >> 8) & 7;      // quarter-band counter
-    const u16 sub = (fwdAcc >> 6) & 3;     // blend sub-step within a band
-    for (u16 j = 0; j < CHECKER_ENTRIES; j++)
-    {
-        const u16 q = (j + tQ) & 7;
-        checkerCols[j] = (q < 3) ? COL_LIGHT
-                       : (q == 3) ? blendLD[sub]
-                       : (q < 7) ? COL_DARK
-                                 : blendDL[sub];
-    }
+    buildCheckerCols();
     PAL_setColors(CHECKER_PAL_BASE, checkerCols, CHECKER_ENTRIES, DMA_QUEUE);
 }

@@ -1,17 +1,16 @@
 #include "mountains.h"
 
 #include "resources.h"
+#include "vram_layout.h"
 
-#define MTN_TILE_INDEX        (TILE_USER_INDEX + img_ground.tileset->numTile)
 #define MTN_PAL              PAL0
 #define MTN_PAL_FIRST_COLOR  1
-#define MTN_PAL_COLOR_COUNT  5
+#define MTN_PAL_COLOR_COUNT  6
 
-#define MTN_PLANE_W_TILES    64
 #define MTN_STRIP_W_TILES    64
 #define MTN_STRIP_H_TILES    12
 #define MTN_STRIP_H          96
-#define MTN_TREE_START       64
+#define MTN_TREE_START       82
 #define MTN_TREE_H           (MTN_STRIP_H - MTN_TREE_START)
 #define MAX_LINES            240
 
@@ -19,8 +18,6 @@ static s16 lineScroll[MAX_LINES];
 static u16 screenH;
 static s16 prevStartY;
 static s16 prevEndY;
-static s16 lastSwayX;
-static s16 lastHorizonY;
 static bool lineScrollValid;
 
 static s16 clampLine(s16 y)
@@ -50,9 +47,10 @@ void MOUNTAINS_init(void)
                   CPU);
 
     VDP_clearPlane(BG_A, TRUE);
-    VDP_loadTileSet(img_mountains.tileset, MTN_TILE_INDEX, DMA);
+    VDP_loadTileSet(img_mountains.tileset, VRAM_MOUNTAIN_TILE_INDEX, DMA);
     VDP_setTileMapEx(BG_A, img_mountains.tilemap,
-                     TILE_ATTR_FULL(MTN_PAL, FALSE, FALSE, FALSE, MTN_TILE_INDEX),
+                     TILE_ATTR_FULL(MTN_PAL, FALSE, FALSE, FALSE,
+                                    VRAM_MOUNTAIN_TILE_INDEX),
                      0, 0, 0, 0,
                      MTN_STRIP_W_TILES, MTN_STRIP_H_TILES,
                      CPU);
@@ -63,9 +61,12 @@ void MOUNTAINS_init(void)
 
     prevStartY = 0;
     prevEndY = 0;
-    lastSwayX = 0;
-    lastHorizonY = 0;
     lineScrollValid = FALSE;
+}
+
+void MOUNTAINS_setColors(const u16* colors6)
+{
+    PAL_setColors(MTN_PAL_FIRST_COLOR, colors6, MTN_PAL_COLOR_COUNT, DMA_QUEUE);
 }
 
 void MOUNTAINS_update(s16 swayX, s16 horizonY)
@@ -77,9 +78,6 @@ void MOUNTAINS_update(s16 swayX, s16 horizonY)
     const s16 visibleEndY = clampLine(stripEndY);
 
     VDP_setVerticalScroll(BG_A, MTN_STRIP_H - horizonY);
-
-    if (lineScrollValid && swayX == lastSwayX && horizonY == lastHorizonY)
-        return;
 
     s16 uploadStartY = visibleStartY;
     s16 uploadEndY = visibleEndY;
@@ -93,8 +91,8 @@ void MOUNTAINS_update(s16 swayX, s16 horizonY)
 
     clearLineRange(visibleStartY, visibleEndY);
 
-    const s16 mtnScroll = -(swayX / 8);
-    const s16 treeScroll = -(swayX / 4);
+    const s16 mtnScroll = swayX >> 3;
+    const s16 treeScroll = swayX >> 2;
     const s16 visibleTreeStartY = clampLine(treeStartY);
 
     for (s16 y = visibleStartY; y < visibleTreeStartY && y < visibleEndY; y++)
@@ -116,7 +114,5 @@ void MOUNTAINS_update(s16 swayX, s16 horizonY)
 
     prevStartY = visibleStartY;
     prevEndY = visibleEndY;
-    lastSwayX = swayX;
-    lastHorizonY = horizonY;
     lineScrollValid = TRUE;
 }

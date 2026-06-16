@@ -7,6 +7,9 @@
 // a taller board bitmap; world projection uses GROUND_horizon (set each frame).
 #define GROUND_HORIZON  96
 
+// Alternate horizon-pinned sky alignment used by the scene palette cycle.
+#define GROUND_SKY_SCROLL_UP_PX  35
+
 // The checker art intentionally leaves the first few rows below the projection
 // horizon transparent to avoid near-horizon moire. Use this when anchoring
 // screen-space colour effects to the first visible ground row.
@@ -16,7 +19,21 @@
 // sprites stay glued to the floor as the horizon moves.
 extern s16 GROUND_horizon;
 
+// Last visible checkerboard scanline. Near objects should disappear before
+// their projected ground contact moves beyond this edge.
+extern s16 GROUND_visibleBottom;
+
 void GROUND_init(void);
+
+// Set the two checker driver colours and rebuild blend tables. Does not write
+// CRAM directly; GROUND_update uploads the animated checker entries.
+void GROUND_setCheckerColors(u16 light, u16 dark);
+void GROUND_setSkyScrollOffset(u16 offsetPx);
+
+// Recolour the checkerboard for the given stage. Index wraps modulo the
+// number of defined stages. Cheap: rebuilds blend tables and re-uploads the
+// 8 checker palette entries; no VRAM tile changes. Takes effect next frame.
+void GROUND_setStagePalette(u16 stageIndex);
 
 // swayX:   lateral offset in pixels (positive = world moves left, i.e.
 //          player moved right)
@@ -24,6 +41,7 @@ void GROUND_init(void);
 // vanishX: player world X for vanishing-point tracking
 // speed:   forward speed driving the checker palette animation (use
 //          GROUND_FORWARD_SPEED for arcade-like baseline)
-void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed);
+void GROUND_update(s16 swayX, s16 pitchY, s16 vanishX, u16 speed,
+                   bool rebuildScroll);
 
 #endif

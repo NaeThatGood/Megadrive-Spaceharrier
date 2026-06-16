@@ -9,13 +9,17 @@ verify it runs.
 
 The horizon mountain artwork is **already created and committed**. Use it as-is.
 
-- **Asset:** `res/sprites/mountains.png` — a **512 x 96** indexed PNG.
-  - Index 0 = transparent (the sky shows through), indices 1–5 = five green shades.
+- **Asset:** `res/sprites/mountains.png` — a **512 x 96** indexed PNG, **7 colours**
+  (fits one CRAM line). Index 0 = transparent.
   - Designed to **wrap horizontally** seamlessly at 512 px (one plane width).
-  - **Top ~2/3 (strip rows 0–63):** rolling green mountains (dark back ridge,
-    brighter body, a 2px sunlit crest).
-  - **Bottom 1/3 (strip rows 64–95):** a band of tiny trees, deliberately kept on
-    its own tile rows so it can be line-scrolled **faster** than the mountains.
+  - **Strip rows 0–81:** a solid rolling mountain mass with a vertical **dithered**
+    gradient — distant/dark green at the crest fading into brighter foreground
+    green lower down — topped by a 2px sunlit crest. Transparent (index 0) appears
+    **only above the crest**, where the sky shows through. No holes inside the mass.
+  - **Strip rows 82–95 (bottom band):** a thin solid dark blue-green base band
+    that stops level with the tree tops, with a line of tiny trees sitting in it.
+    This band is on its own tile rows so it can be line-scrolled **faster** than
+    the mountains for parallax.
 - Reproducible generator (only if you ever need to tweak the art):
   `tools/gen_mountains.py` (`python3 tools/gen_mountains.py`).
 - `res/sprites/mountains_wrap_preview.png` is a visual wrap-check only — **do not**
@@ -121,12 +125,13 @@ s16 mtnScroll  = swayX >> 3;      // distant peaks: slow
 s16 treeScroll = swayX >> 2;      // nearer trees:  faster
 ```
 
-The band boundary in **screen space** follows the vertical scroll: strip row 64
-appears at screen row `horizonY - 32`. So for each scanline `r`:
+The band boundary in **screen space** follows the vertical scroll: the tree band
+starts at strip row 82, which appears at screen row `horizonY - 14`. So for each
+scanline `r`:
 
 - `r <  (horizonY - 96)`  -> above the strip, leave as-is (sky).
-- `(horizonY-96) <= r < (horizonY-32)` -> mountain rows -> `mtnScroll`.
-- `(horizonY-32) <= r <  horizonY`      -> tree rows    -> `treeScroll`.
+- `(horizonY-96) <= r < (horizonY-14)` -> mountain rows -> `mtnScroll`.
+- `(horizonY-14) <= r <  horizonY`      -> tree band     -> `treeScroll`.
 - `r >= horizonY` -> ground takes over.
 
 Write the table with `VDP_setHorizontalScrollLine(BG_A, startLine, buf, count, DMA)`

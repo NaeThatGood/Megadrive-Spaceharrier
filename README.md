@@ -32,7 +32,6 @@ See the companion documents:
 | --- | --- |
 | D-pad | Move player |
 | A / B | Slow / speed up enemy scaling |
-| C | Switch between STORED and RUNTIME scaling modes |
 | X | Fire |
 | Y | Toggle graduated horizon / sky scanline effect |
 | Z | Cycle Harrier movement speed in 25% steps |
@@ -47,7 +46,6 @@ CPU load percentage (>100% = missed frames) and frames per second.
 src/main.c                          game loop, player, shots, collision
 src/engine/                         ground renderer, world/projection, HUD
 src/prototypes/stored_frames/       pre-rendered scale-frame renderer
-src/prototypes/runtime_scaling/     68000 software-scaling renderer
 res/                                rescomp resources (sprites, audio, palettes)
 tools/gen_assets.py                 procedural placeholder art generator
 tools/gen_scale_frames.py           pre-rendered scale strip generator
@@ -160,19 +158,13 @@ The same four targets are available as Cursor/VS Code tasks
 The ROM is a plain `out/rom.bin` (128 KB, padded, checksummed) and also runs
 on real hardware via an EverDrive-style flash cart.
 
-## Playtesting the two prototypes
+## Playtesting
 
-1. `make run` — the ROM boots in STORED mode ("Get ready!" plays).
-2. Watch enemies spawn at the horizon and fly toward you. In stored mode they
-   step through 15 pre-rendered sizes (8 to 64 px). Note the HUD: rock-solid
-   60 FPS, CPU ~25%.
-3. Press C to switch to RUNTIME mode. The same enemies are now scaled in
-   software by the 68000 in 1-pixel size increments (smoother size ramp), but
-   watch the HUD: CPU load >100% and FPS drops as soon as a couple of large
-   objects need rescaling.
-4. Fly into an enemy to see the collision flash; shoot enemies with A/B/C.
-5. Switch modes back and forth during a heavy wave to feel the frame-rate
-   difference directly.
+1. `make run` — the ROM boots in stored-frame mode ("Get ready!" plays).
+2. Watch enemies spawn at the horizon and fly toward you. They step through
+   pre-rendered sizes from 8 to 64 px while the HUD tracks live object count,
+   CPU load, and FPS.
+3. Fly into an enemy to see the collision flash; shoot enemies with X.
 
 ## Regenerating placeholder assets
 

@@ -40,10 +40,6 @@ extern const u16 WORLD_projLUT[];
 #define MAX_OBJECTS     3
 #define MAX_SHOTS       4
 
-// Runtime renderer: each object owns this many VRAM tiles (see render_runtime.c).
-#define RT_SLOT_TILES       64
-#define RT_RESERVED_TILES   (MAX_OBJECTS * RT_SLOT_TILES)
-
 // Object base size in pixels when at z = WORLD_Z_NEAR
 #define OBJ_BASE_SIZE   64
 
@@ -57,9 +53,10 @@ typedef struct WObj
     u16     vz;         // approach speed (subtracted from z each frame)
     u16     stepVz;     // vz scaled by current enemy speed percentage
     u8      sizeIdx;    // current frame bucket / cached size (renderer data)
+    u8      slot;       // stable object slot (renderer bookkeeping)
     Sprite* sprs[4];    // sprite-engine handles (renderer bookkeeping)
     Sprite* shadow;     // ground contact shadow (owned by object lifetime)
-    u16     vramIndex;  // VRAM tile slot (runtime renderer bookkeeping)
+    u16     vramIndex;  // renderer bookkeeping
 } WObj;
 
 typedef struct
@@ -122,14 +119,6 @@ typedef struct
 } Renderer;
 
 extern const Renderer RENDER_stored;
-extern const Renderer RENDER_runtime;
-
-// Valid after RENDER_runtime.init(); may be < MAX_OBJECTS when ground tiles
-// leave little user VRAM below the sprite-engine pool.
-u8 RUNTIME_slotCapacity(void);
-
-// Call after GROUND_init() to size the sprite-engine pool so runtime object
-// slots can live after the ground tileset without overlapping it or crashing.
-u16 RUNTIME_spriteVramBudget(void);
+void RENDER_storedRelease(void);
 
 #endif

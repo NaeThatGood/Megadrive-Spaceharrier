@@ -1,21 +1,22 @@
 #include <genesis.h>
 #include "resources.h"
 #include "engine/ground.h"
+#include "engine/clouds.h"
 #include "engine/world.h"
 #include "engine/hud.h"
-#include "engine/sky.h"
 #include "engine/shadow.h"
 #include "engine/mountains.h"
+#include "engine/scenepal.h"
 
 // --- Player -----------------------------------------------------------------
 
 #define PLAYER_W        64
-#define PLAYER_H        96
+#define PLAYER_H        72
 
 #define PLAYER_MIN_X    8
 #define PLAYER_MAX_X    (320 - PLAYER_W - 8)
 #define PLAYER_MIN_Y    16
-#define PLAYER_FEET_Y   (PLAYER_H - 20)   // matches playerWorldY() reference
+#define PLAYER_FEET_Y   PLAYER_H          // cropped sprite ends at the feet
 #define PLAYER_GROUND_SINK  8             // feet dip into checker when low
 
 #define PLAYER_CENTER_X ((320 - PLAYER_W) / 2)
@@ -27,6 +28,7 @@
 #define ENEMY_SPEED_MIN      10
 #define ENEMY_SPEED_MAX      200
 #define ENEMY_SPEED_STEP     10
+#define INPUT_STARTUP_SETTLE_FRAMES 8
 #define MAX_TREES            4
 #define TREE_VISIBLE_COUNT   3
 #define TREE_NEAR_SPRITES    1
@@ -44,9 +46,31 @@
 #define TREE_DEPTH           200
 #define PLAYER_DEPTH         0
 #define SHOT_SHADOW_SIZE     12
+#define SPRITE_POOL_TILES    640
+#define BOSS_SQUILLA_SEGMENTS 3
+#define BOSS_SQUILLA_HISTORY 32
+#define BOSS_SQUILLA_HEAD    0
+#define BOSS_SQUILLA_BODY    1
+#define BOSS_SQUILLA_TAIL    2
+#define BOSS_SQUILLA_FAR_Z   WORLD_Z_FAR
+#define BOSS_SQUILLA_NEAR_Z  768
+#define BOSS_SQUILLA_WX_MAX  430
+#define BOSS_SQUILLA_WY_MIN  36
+#define BOSS_SQUILLA_WY_MAX  128
+#define BOSS_SQUILLA_SPAWN_WY 84
+#define BOSS_SQUILLA_ENTER_VZ 96
+#define BOSS_SQUILLA_ROAM_VZ  72
+#define BOSS_SQUILLA_ROAM_FAR_Z 3000
+#define BOSS_SQUILLA_NEAR_HOLD_FRAMES 45
+#define BOSS_SQUILLA_LEAVE_VZ 72
+#define BOSS_SQUILLA_LEAVE_CENTER_STEP 16
+#define BOSS_SQUILLA_DEPTH   120
+#define BOSS_SQUILLA_BUCKETS 7
+#define BOSS_SQUILLA_BUCKET_NONE 0xFF
 
 static Sprite* player;
 static Sprite* playerShadow;
+static Sprite* objShadows[MAX_OBJECTS];
 static s16 playerX;
 static s16 playerY;
 static s16 playerMaxY;     // lowest Y (ground hover); depends on screen height
@@ -59,6 +83,19 @@ typedef struct
     s16     wx;
     u16     z;
 } WTree;
+
+typedef struct
+{
+    s16 wx;
+    s16 wy;
+    u16 z;
+} BossPathSample;
+
+typedef struct
+{
+    Sprite* spr;
+    u8 bucket;
+} SquillaSegment;
 
 static WTree trees[MAX_TREES];
 static Sprite* treeNearSprs[TREE_NEAR_SPRITES][TREE_HALF_COUNT];
@@ -76,8 +113,33 @@ static u16 playerSpeed;
 static u8 playerSpeedStep;
 static u16 enemySpeedPct;
 static u8 gFramesPerUpdate = 1;
+static u16 scrollPhase;
 static u16 prevJoy;
+static u8 inputSettleFrames;
 static bool paused;
+static bool enemySpawningEnabled;
+static bool enemyPoolReleased;
+static bool bossRequestArmed;
+
+typedef enum
+{
+    BOSS_STATE_OFF,
+    BOSS_STATE_PENDING,
+    BOSS_STATE_ACTIVE,
+    BOSS_STATE_LEAVING,
+    BOSS_STATE_RESTORE_WAIT
+} BossState;
+
+static BossState bossState;
+static SquillaSegment bossSquilla[BOSS_SQUILLA_SEGMENTS];
+static BossPathSample bossHead;
+static BossPathSample bossHistory[BOSS_SQUILLA_HISTORY];
+static u8 bossHistoryCursor;
+static u16 bossNearHoldFrames;
+static bool bossApproaching;
+static s16 bossVx;
+static s16 bossVy;
+static s16 bossVz;
 
 // --- Helpers ----------------------------------------------------------------
 
@@ -96,7 +158,7 @@ static s16 playerWorldY(void)
     // Height of the player's torso above the ground plane, world units.
     // GROUND_horizon + WORLD_GROUND_DEPTH = bottom of a ground object
     // right at the player plane.
-    return (GROUND_horizon + WORLD_GROUND_DEPTH) - (playerY + PLAYER_H - 20);
+    return (GROUND_horizon + WORLD_GROUND_DEPTH) - (playerY + PLAYER_FEET_Y);
 }
 
 static u16 countObjects(void)
@@ -162,6 +224,17 @@ static void initTreeFrameLut(void)
         }
         treeFrameForSize[size] = best;
     }
+}
+
+static void initSkyPalette(void)
+{
+    PAL_setColor((PAL3 << 4) + 12, RGB24_TO_VDPCOLOR(0x2A4B8D));
+    PAL_setColor((PAL3 << 4) + 13, RGB24_TO_VDPCOLOR(0x3A63B0));
+    PAL_setColor((PAL3 << 4) + 14, RGB24_TO_VDPCOLOR(0x4E80CC));
+    PAL_setColor((PAL3 << 4) + 15, RGB24_TO_VDPCOLOR(0x6CA0E0));
+    PAL_setColor((PAL3 << 4) + 5,  RGB24_TO_VDPCOLOR(0x97C2EE));
+    PAL_setColor((PAL3 << 4) + 4,  RGB24_TO_VDPCOLOR(0xC2E0F5));
+    PAL_setColor(PAL0 << 4, RGB24_TO_VDPCOLOR(0x2A4B8D));
 }
 
 static u8 treeSizeToFrame(u16 sizePx)
@@ -233,6 +306,7 @@ static void initTrees(void)
 {
     initTreeFrameLut();
     PAL_setPalette(PAL3, spr_tree_scaled.palette->data, CPU);
+    initSkyPalette();
 
     for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
     {
@@ -250,6 +324,97 @@ static void initTrees(void)
 
     for (u8 i = 0; i < MAX_TREES; i++)
         resetTree(&trees[i], i, WORLD_Z_FAR - (u16) i * TREE_Z_SPACING);
+}
+
+static void releaseTreePair(Sprite* sprs[TREE_HALF_COUNT])
+{
+    if (sprs[TREE_HALF_RIGHT])
+    {
+        SPR_releaseSprite(sprs[TREE_HALF_RIGHT]);
+        sprs[TREE_HALF_RIGHT] = NULL;
+    }
+    if (sprs[TREE_HALF_LEFT])
+    {
+        SPR_releaseSprite(sprs[TREE_HALF_LEFT]);
+        sprs[TREE_HALF_LEFT] = NULL;
+    }
+}
+
+static void releaseTrees(void)
+{
+    for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
+    {
+        releaseTreePair(treeNearSprs[i]);
+        treeNearFrameIdx[i] = 0xFF;
+    }
+
+    for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
+    {
+        releaseTreePair(treeFarSprs[i]);
+        treeFarFrameIdx[i] = 0xFF;
+    }
+
+    for (u8 i = 0; i < TREE_VISIBLE_COUNT; i++)
+    {
+        SHADOW_release(treeShadowSprs[i]);
+        treeShadowSprs[i] = NULL;
+    }
+}
+
+static void initObjectShadows(void)
+{
+    for (u8 i = 0; i < MAX_OBJECTS; i++)
+    {
+        objShadows[i] = SHADOW_add();
+        if (!objShadows[i])
+            SYS_die("object shadow allocation failed");
+    }
+}
+
+static void releaseObjectShadows(void)
+{
+    for (u8 i = 0; i < MAX_OBJECTS; i++)
+    {
+        SHADOW_release(objShadows[i]);
+        objShadows[i] = NULL;
+    }
+}
+
+static void initShots(void)
+{
+    for (u8 i = 0; i < MAX_SHOTS; i++)
+    {
+        shots[i].active = FALSE;
+        if (!shots[i].spr)
+            shots[i].spr = SPR_addSprite(&spr_shot, -16, -16,
+                                         TILE_ATTR(PAL2, 0, FALSE, FALSE));
+        if (shots[i].spr)
+            SPR_setVisibility(shots[i].spr, HIDDEN);
+        if (!shots[i].shadow)
+            shots[i].shadow = SHADOW_add();
+        if (!shots[i].spr || !shots[i].shadow)
+            SYS_die("shot pool allocation failed");
+    }
+}
+
+static void releaseShotsForBoss(void)
+{
+    for (u8 i = 0; i < MAX_SHOTS; i++)
+    {
+        WShot* s = &shots[i];
+        if (i == 0)
+        {
+            if (s->spr) SPR_setVisibility(s->spr, HIDDEN);
+        }
+        else if (s->spr)
+        {
+            SPR_releaseSprite(s->spr);
+            s->spr = NULL;
+        }
+        SHADOW_release(s->shadow);
+        s->shadow = NULL;
+        s->active = FALSE;
+    }
 }
 
 static void updateTrees(void)
@@ -373,10 +538,11 @@ static void spawnObject(void)
         if (o->active) continue;
 
         o->active = TRUE;
+        o->slot = (u8) i;
         o->vramIndex = 0;
         o->sizeIdx = 0;
         for (u8 q = 0; q < 4; q++) o->sprs[q] = NULL;
-        o->shadow = SHADOW_add();
+        o->shadow = objShadows[o->slot];
         o->wx = (s16) (random() % 281) - 140;
         o->wy = (random() & 1) ? 0 : (s16) (20 + (random() % 51));
         o->z  = WORLD_Z_FAR;
@@ -391,8 +557,7 @@ static void spawnObject(void)
 static void killObject(WObj* o)
 {
     renderer->despawn(o);
-    SHADOW_release(o->shadow);
-    o->shadow = NULL;
+    SHADOW_hide(o->shadow);
     o->active = FALSE;
 }
 
@@ -421,12 +586,18 @@ static void updateObjects(void)
         o->z -= stepVz;
 
         const u16 q = WORLD_proj(o->z);
+        const s16 groundY = WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD;
+        if (groundY >= GROUND_visibleBottom)
+        {
+            killObject(o);
+            continue;
+        }
+
         const s16 sx = WORLD_screenXq(o->wx, q);
         const s16 sy = WORLD_screenYBq(o->wy, q);
         const u16 sizePx = WORLD_sizePxq(q);
         renderer->update(o, sx, sy, sizePx);
-        if (o->sprs[0]) SHADOW_place(o->shadow, o->wx, o->z, sizePx);
-        else SHADOW_hide(o->shadow);
+        SHADOW_place(o->shadow, o->wx, o->z, sizePx);
     }
 }
 
@@ -443,19 +614,19 @@ static void fireShot(void)
         s->wx = playerWorldX();
         s->wy = playerWorldY() + 28;   // cannon height
         s->z  = WORLD_Z_NEAR;
-        s->spr = SPR_addSprite(&spr_shot, -16, -16,
-                               TILE_ATTR(PAL2, 0, FALSE, FALSE));
-        s->shadow = SHADOW_add();
+        if (s->spr)
+        {
+            SPR_setPosition(s->spr, -16, -16);
+            SPR_setVisibility(s->spr, VISIBLE);
+        }
         return;
     }
 }
 
 static void killShot(WShot* s)
 {
-    if (s->spr) SPR_releaseSprite(s->spr);
-    s->spr = NULL;
-    SHADOW_release(s->shadow);
-    s->shadow = NULL;
+    if (s->spr) SPR_setVisibility(s->spr, HIDDEN);
+    SHADOW_hide(s->shadow);
     s->active = FALSE;
 }
 
@@ -510,50 +681,363 @@ static void updateShots(void)
     }
 }
 
-// --- Mode switch ------------------------------------------------------------
+// --- Mode helpers -----------------------------------------------------------
 
 static void playGetReady(void)
 {
     XGM2_playPCM(snd_getready, sizeof(snd_getready), SOUND_PCM_CH_AUTO);
 }
 
-static void setRenderer(const Renderer* r)
+static const SpriteDefinition* const
+SQUILLA_DEFS[BOSS_SQUILLA_SEGMENTS][BOSS_SQUILLA_BUCKETS] =
 {
-    DMA_waitCompletion();
-    SPR_update();
+    { &spr_squilla_head_1, &spr_squilla_head_1a, &spr_squilla_head_1b,
+      &spr_squilla_head_2, &spr_squilla_head_2a, &spr_squilla_head_3,
+      &spr_squilla_head_4 },
+    { &spr_squilla_body_1, &spr_squilla_body_1a, &spr_squilla_body_1b,
+      &spr_squilla_body_2, &spr_squilla_body_2a, &spr_squilla_body_3,
+      &spr_squilla_body_4 },
+    { &spr_squilla_tail_1, &spr_squilla_tail_1a, &spr_squilla_tail_1b,
+      &spr_squilla_tail_2, &spr_squilla_tail_2a, &spr_squilla_tail_3,
+      &spr_squilla_tail_4 }
+};
 
-    for (u16 i = 0; i < MAX_OBJECTS; i++)
-        if (objects[i].active) renderer->despawn(&objects[i]);
+static const u8 SQUILLA_W[BOSS_SQUILLA_SEGMENTS][BOSS_SQUILLA_BUCKETS] =
+{
+    { 72, 64, 48, 40, 32, 24, 16 },
+    { 72, 64, 48, 40, 32, 24, 16 },
+    { 120, 104, 80, 64, 48, 40, 24 }
+};
 
-    SPR_update();
+static const u8 SQUILLA_H[BOSS_SQUILLA_SEGMENTS][BOSS_SQUILLA_BUCKETS] =
+{
+    { 112, 96, 80, 64, 48, 40, 24 },
+    { 112, 96, 80, 64, 48, 40, 24 },
+    { 80, 72, 56, 48, 32, 24, 16 }
+};
 
-    renderer = r;
+static const u8 SQUILLA_DELAY[BOSS_SQUILLA_SEGMENTS] = { 0, 8, 16 };
+static const u16 SQUILLA_Z_OFFSET[BOSS_SQUILLA_SEGMENTS] = { 0, 180, 360 };
+
+static void initSquillaBossData(void)
+{
+    for (u8 i = 0; i < BOSS_SQUILLA_SEGMENTS; i++)
+    {
+        bossSquilla[i].spr = NULL;
+        bossSquilla[i].bucket = BOSS_SQUILLA_BUCKET_NONE;
+    }
+    bossHistoryCursor = 0;
+}
+
+static u8 squillaBucketForZ(u16 z)
+{
+    if (z <= 1000) return 0;
+    if (z <= 1300) return 1;
+    if (z <= 1700) return 2;
+    if (z <= 2200) return 3;
+    if (z <= 2700) return 4;
+    if (z <= 3400) return 5;
+    return 6;
+}
+
+static void releaseSquillaSegment(u8 segment)
+{
+    if (bossSquilla[segment].spr)
+    {
+        SPR_releaseSprite(bossSquilla[segment].spr);
+        bossSquilla[segment].spr = NULL;
+    }
+    bossSquilla[segment].bucket = BOSS_SQUILLA_BUCKET_NONE;
+}
+
+static void releaseSquillaBoss(void)
+{
+    for (u8 i = 0; i < BOSS_SQUILLA_SEGMENTS; i++)
+        releaseSquillaSegment(i);
+}
+
+static void hideSquillaBoss(void)
+{
+    for (u8 i = 0; i < BOSS_SQUILLA_SEGMENTS; i++)
+    {
+        if (bossSquilla[i].spr)
+        {
+            SPR_setVisibility(bossSquilla[i].spr, HIDDEN);
+            SPR_setPosition(bossSquilla[i].spr, -128, -128);
+        }
+    }
+}
+
+static bool ensureSquillaSegment(u8 segment, u8 bucket)
+{
+    if (bossSquilla[segment].spr && bossSquilla[segment].bucket == bucket)
+        return TRUE;
+
+    releaseSquillaSegment(segment);
+
+    bossSquilla[segment].spr =
+        SPR_addSprite(SQUILLA_DEFS[segment][bucket], -128, -128,
+                      TILE_ATTR(PAL2, 0, FALSE, FALSE));
+    if (!bossSquilla[segment].spr)
+        return FALSE;
+
+    bossSquilla[segment].bucket = bucket;
+    SPR_setDepth(bossSquilla[segment].spr, BOSS_SQUILLA_DEPTH + segment);
+    return TRUE;
+}
+
+static void fillSquillaHistory(void)
+{
+    for (u8 i = 0; i < BOSS_SQUILLA_HISTORY; i++)
+        bossHistory[i] = bossHead;
+    bossHistoryCursor = 0;
+}
+
+static void recordSquillaHead(void)
+{
+    bossHistory[bossHistoryCursor] = bossHead;
+    bossHistoryCursor++;
+    if (bossHistoryCursor >= BOSS_SQUILLA_HISTORY)
+        bossHistoryCursor = 0;
+}
+
+static BossPathSample squillaHistorySample(u8 delay)
+{
+    u8 idx = bossHistoryCursor;
+    const u8 back = delay + 1;
+    idx = (idx + BOSS_SQUILLA_HISTORY - back) & (BOSS_SQUILLA_HISTORY - 1);
+    return bossHistory[idx];
+}
+
+static s16 approachS16(s16 value, s16 target, s16 step)
+{
+    if (value < target)
+    {
+        value += step;
+        if (value > target) value = target;
+    }
+    else if (value > target)
+    {
+        value -= step;
+        if (value < target) value = target;
+    }
+    return value;
+}
+
+static void renderSquillaBoss(void)
+{
+    for (u8 i = 0; i < BOSS_SQUILLA_SEGMENTS; i++)
+    {
+        BossPathSample p = squillaHistorySample(SQUILLA_DELAY[i]);
+        const u16 offsetZ = SQUILLA_Z_OFFSET[i];
+        p.z = (p.z > BOSS_SQUILLA_FAR_Z - offsetZ)
+            ? BOSS_SQUILLA_FAR_Z
+            : (p.z + offsetZ);
+
+        if (bossState == BOSS_STATE_LEAVING &&
+            p.z >= BOSS_SQUILLA_FAR_Z - BOSS_SQUILLA_LEAVE_VZ)
+        {
+            if (bossSquilla[i].spr)
+                SPR_setVisibility(bossSquilla[i].spr, HIDDEN);
+            continue;
+        }
+
+        const u8 bucket = squillaBucketForZ(p.z);
+        if (!ensureSquillaSegment(i, bucket))
+            continue;
+
+        const u16 q = WORLD_proj(p.z);
+        const s16 sx = WORLD_screenXq(p.wx, q);
+        const s16 sy = WORLD_screenYBq(p.wy, q);
+        const s16 x = sx - (SQUILLA_W[i][bucket] / 2);
+        const s16 y = sy - SQUILLA_H[i][bucket];
+
+        SPR_setPosition(bossSquilla[i].spr, x, y);
+        SPR_setVisibility(bossSquilla[i].spr, VISIBLE);
+    }
+}
+
+static bool squillaFullyRetreated(void)
+{
+    for (u8 i = 0; i < BOSS_SQUILLA_SEGMENTS; i++)
+    {
+        BossPathSample p = squillaHistorySample(SQUILLA_DELAY[i]);
+        const u16 offsetZ = SQUILLA_Z_OFFSET[i];
+        p.z = (p.z > BOSS_SQUILLA_FAR_Z - offsetZ)
+            ? BOSS_SQUILLA_FAR_Z
+            : (p.z + offsetZ);
+        if (p.z < BOSS_SQUILLA_FAR_Z - BOSS_SQUILLA_LEAVE_VZ)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static void startBossRequest(void)
+{
+    if (bossState != BOSS_STATE_OFF) return;
+
+    bossRequestArmed = TRUE;
+    bossState = BOSS_STATE_PENDING;
+    enemySpawningEnabled = FALSE;
+    CLOUDS_evict();
+}
+
+static void restoreNormalMode(void)
+{
+    bossState = BOSS_STATE_OFF;
+    bossRequestArmed = FALSE;
+    enemySpawningEnabled = TRUE;
+    enemyPoolReleased = FALSE;
+    spawnTimer = 0;
+
+    SHADOW_init();
+    CLOUDS_init();
+    initTrees();
+    initObjectShadows();
+    initShots();
+    playerShadow = SHADOW_add();
+    if (!playerShadow)
+        SYS_die("player shadow allocation failed");
     renderer->init();
     SHADOW_init();
+}
 
-    if (renderer == &RENDER_runtime && RUNTIME_slotCapacity() == 0)
+static void spawnSquillaBoss(void)
+{
+    PAL_setPalette(PAL2, spr_squilla_head_1.palette->data, DMA_QUEUE);
+    SHADOW_init();
+
+    releaseSquillaBoss();
+    bossHead.wx = 0;
+    bossHead.wy = BOSS_SQUILLA_SPAWN_WY;
+    bossHead.z = BOSS_SQUILLA_FAR_Z;
+    bossVx = 4;
+    bossVy = 2;
+    bossVz = -BOSS_SQUILLA_ENTER_VZ;
+    bossNearHoldFrames = 0;
+    bossApproaching = TRUE;
+    fillSquillaHistory();
+    recordSquillaHead();
+    bossState = BOSS_STATE_ACTIVE;
+}
+
+static void updateBossMode(void)
+{
+    if (bossState == BOSS_STATE_PENDING)
     {
-        renderer = &RENDER_stored;
-        renderer->init();
-        SHADOW_init();
-    }
-    else if (renderer == &RENDER_runtime)
-    {
-        u8 cap = RUNTIME_slotCapacity();
-        u8 kept = 0;
-        for (u16 i = 0; i < MAX_OBJECTS; i++)
+        if (!bossRequestArmed) return;
+
+        if (countObjects() == 0 && CLOUDS_areOffscreen())
         {
-            if (!objects[i].active) continue;
-            if (kept >= cap) killObject(&objects[i]);
-            else kept++;
+            if (!enemyPoolReleased)
+            {
+                RENDER_storedRelease();
+                CLOUDS_release();
+                releaseTrees();
+                releaseObjectShadows();
+                releaseShotsForBoss();
+                SHADOW_release(playerShadow);
+                playerShadow = NULL;
+                enemyPoolReleased = TRUE;
+                return;
+            }
+            else
+            {
+                bossRequestArmed = FALSE;
+                spawnSquillaBoss();
+            }
+        }
+        return;
+    }
+
+    if (bossState == BOSS_STATE_RESTORE_WAIT)
+    {
+        releaseSquillaBoss();
+        restoreNormalMode();
+        return;
+    }
+
+    if (bossState == BOSS_STATE_ACTIVE)
+    {
+        if (bossNearHoldFrames)
+        {
+            bossHead.z = BOSS_SQUILLA_NEAR_Z;
+            bossNearHoldFrames = (bossNearHoldFrames > gFramesPerUpdate)
+                               ? (bossNearHoldFrames - gFramesPerUpdate)
+                               : 0;
+            if (!bossNearHoldFrames)
+                bossVz = BOSS_SQUILLA_ROAM_VZ;
+        }
+        else
+        {
+            const s16 stepVz = bossVz * (s16) gFramesPerUpdate;
+            if (stepVz < 0 && bossHead.z <= (u16) -stepVz + BOSS_SQUILLA_NEAR_Z)
+            {
+                bossHead.z = BOSS_SQUILLA_NEAR_Z;
+                bossVz = 0;
+                bossNearHoldFrames = BOSS_SQUILLA_NEAR_HOLD_FRAMES;
+                bossApproaching = FALSE;
+            }
+            else if (stepVz > 0 &&
+                     bossHead.z >= BOSS_SQUILLA_ROAM_FAR_Z - (u16) stepVz)
+            {
+                bossHead.z = BOSS_SQUILLA_ROAM_FAR_Z;
+                bossVz = -BOSS_SQUILLA_ROAM_VZ;
+            }
+            else
+            {
+                bossHead.z = (u16) ((s16) bossHead.z + stepVz);
+            }
+        }
+
+        if (!bossApproaching || bossHead.z < 3000)
+        {
+            bossHead.wx += bossVx * (s16) gFramesPerUpdate;
+            bossHead.wy += bossVy * (s16) gFramesPerUpdate;
+
+            if (bossHead.wx <= -BOSS_SQUILLA_WX_MAX ||
+                bossHead.wx >= BOSS_SQUILLA_WX_MAX)
+            {
+                bossVx = -bossVx;
+                if (bossHead.wx < -BOSS_SQUILLA_WX_MAX)
+                    bossHead.wx = -BOSS_SQUILLA_WX_MAX;
+                if (bossHead.wx > BOSS_SQUILLA_WX_MAX)
+                    bossHead.wx = BOSS_SQUILLA_WX_MAX;
+            }
+
+            if (bossHead.wy <= BOSS_SQUILLA_WY_MIN ||
+                bossHead.wy >= BOSS_SQUILLA_WY_MAX)
+            {
+                bossVy = -bossVy;
+                if (bossHead.wy < BOSS_SQUILLA_WY_MIN)
+                    bossHead.wy = BOSS_SQUILLA_WY_MIN;
+                if (bossHead.wy > BOSS_SQUILLA_WY_MAX)
+                    bossHead.wy = BOSS_SQUILLA_WY_MAX;
+            }
+        }
+    }
+    else if (bossState == BOSS_STATE_LEAVING)
+    {
+        const u16 stepVz = BOSS_SQUILLA_LEAVE_VZ * gFramesPerUpdate;
+        const s16 centerStep = BOSS_SQUILLA_LEAVE_CENTER_STEP *
+                               (s16) gFramesPerUpdate;
+
+        bossHead.wx = approachS16(bossHead.wx, 0, centerStep);
+        bossHead.wy = approachS16(bossHead.wy, BOSS_SQUILLA_SPAWN_WY, centerStep);
+        bossHead.z = (bossHead.z >= BOSS_SQUILLA_FAR_Z - stepVz)
+                   ? BOSS_SQUILLA_FAR_Z
+                   : (bossHead.z + stepVz);
+
+        if (squillaFullyRetreated())
+        {
+            hideSquillaBoss();
+            bossState = BOSS_STATE_RESTORE_WAIT;
+            return;
         }
     }
 
-    gFramesPerUpdate = (renderer == &RENDER_runtime) ? 2 : 1;
-    refreshEnemySteps();
-
-    for (u16 i = 0; i < MAX_OBJECTS; i++)
-        if (objects[i].active) renderer->spawn(&objects[i]);
+    recordSquillaHead();
+    renderSquillaBoss();
 }
 
 // --- Input ------------------------------------------------------------------
@@ -561,15 +1045,19 @@ static void setRenderer(const Renderer* r)
 static void handleInput(void)
 {
     const u16 joy = JOY_readJoypad(JOY_1);
+
+    if (inputSettleFrames)
+    {
+        prevJoy = joy;
+        inputSettleFrames--;
+        return;
+    }
+
     const u16 pressed = joy & ~prevJoy;
     prevJoy = joy;
 
     if (pressed & BUTTON_START)
         paused = !paused;
-
-    if (pressed & BUTTON_C)
-        setRenderer((renderer == &RENDER_stored) ? &RENDER_runtime
-                                                 : &RENDER_stored);
 
     if (paused) return;
 
@@ -584,13 +1072,22 @@ static void handleInput(void)
         refreshEnemySteps();
     }
 
-    if (pressed & BUTTON_Y)
-        sky_setEnabled(!sky_isEnabled());
     if (pressed & BUTTON_Z)
         setPlayerSpeedStep(playerSpeedStep + 1);
 
+    if (pressed & BUTTON_C)
+        SCENEPAL_cycle();
+
     if (pressed & BUTTON_X)
         fireShot();
+
+    if (pressed & BUTTON_Y)
+    {
+        if (bossState == BOSS_STATE_ACTIVE)
+            bossState = BOSS_STATE_LEAVING;
+        else
+            startBossRequest();
+    }
 
     const u16 moveStep = playerSpeed * gFramesPerUpdate;
     if (joy & BUTTON_LEFT)  playerX -= moveStep;
@@ -610,17 +1107,17 @@ int main(bool hardReset)
 {
     (void) hardReset;
 
-    // Stored rendering advances every display frame; runtime rendering can opt
-    // into every-other-frame updates when switched in.
     VDP_setScreenWidth320();
     if (IS_PAL_SYSTEM) VDP_setScreenHeight240();
     JOY_setSupport(PORT_1, JOY_SUPPORT_6BTN);
 
-    // Ground first: stabilises TILE_MAX_NUM, then reserve VRAM after the
-    // BG plane tiles for runtime scaling slots before the sprite pool exists.
+    // Ground first: stabilises TILE_MAX_NUM before the sprite engine reserves
+    // the VRAM pool used by stored enemy frames, trees, shadows, shots, player.
     GROUND_init();
-    SPR_initEx(RUNTIME_spriteVramBudget());
+    SPR_initEx(SPRITE_POOL_TILES);
     MOUNTAINS_init();
+    CLOUDS_init();
+    SCENEPAL_init();
     SHADOW_init();
 
     HUD_init();
@@ -633,24 +1130,32 @@ int main(bool hardReset)
     playerY = playerMaxY - 8;
     setPlayerSpeedStep(0);
     enemySpeedPct = ENEMY_SPEED_DEFAULT;
+    prevJoy = JOY_readJoypad(JOY_1);
+    inputSettleFrames = INPUT_STARTUP_SETTLE_FRAMES;
+    enemySpawningEnabled = TRUE;
+    enemyPoolReleased = FALSE;
+    bossRequestArmed = FALSE;
+    bossState = BOSS_STATE_OFF;
+    initSquillaBossData();
     player = SPR_addSprite(&spr_player, playerX, playerY,
                            TILE_ATTR(PAL1, 0, FALSE, FALSE));
     if (player) SPR_setDepth(player, PLAYER_DEPTH);
     playerShadow = SHADOW_add();
     initTrees();
+    initObjectShadows();
+    initShots();
 
     renderer = &RENDER_stored;
     gFramesPerUpdate = 1;
     renderer->init();
     SHADOW_init();
+    CLOUDS_applyPalette();
 
-    sky_init();
-    GROUND_update(playerX - PLAYER_CENTER_X, playerPitchY(), playerWorldX(), 0);
+    GROUND_update(playerX - PLAYER_CENTER_X, playerPitchY(), playerWorldX(), 0,
+                  TRUE);
     MOUNTAINS_update(playerX - PLAYER_CENTER_X,
                      GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
-    sky_setHorizon(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
-    sky_vblank();
-    SYS_setVIntCallback(sky_vblank);
+    CLOUDS_update(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
 
     playGetReady();
 
@@ -660,23 +1165,31 @@ int main(bool hardReset)
 
         if (!paused)
         {
+            scrollPhase++;
+
             // Ground first: it sets GROUND_horizon, which the projection of
             // every object and shot below depends on.
+            SCENEPAL_update();
             GROUND_update(playerX - PLAYER_CENTER_X, playerPitchY(), playerWorldX(),
-                          GROUND_FORWARD_SPEED * gFramesPerUpdate);
+                          GROUND_FORWARD_SPEED * gFramesPerUpdate,
+                          (scrollPhase & 1) == 0);
             MOUNTAINS_update(playerX - PLAYER_CENTER_X,
                              GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
-            sky_setHorizon(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
+            CLOUDS_update(GROUND_horizon + GROUND_VISIBLE_HORIZON_PAD);
 
-            spawnTimer += gFramesPerUpdate;
-            if (spawnTimer >= WORLD_SPAWN_INTERVAL)
+            if (enemySpawningEnabled)
             {
-                spawnTimer = 0;
-                spawnObject();
+                spawnTimer += gFramesPerUpdate;
+                if (spawnTimer >= WORLD_SPAWN_INTERVAL)
+                {
+                    spawnTimer = 0;
+                    spawnObject();
+                }
             }
 
             updateTrees();
             updateObjects();
+            updateBossMode();
             updateShots();
             if (renderer->frame) renderer->frame();
 
@@ -698,7 +1211,8 @@ int main(bool hardReset)
 
         HUD_update(renderer->name, countObjects, hits, enemySpeedPct);
 
-        SHADOW_place(playerShadow, playerWorldX(), WORLD_Z_NEAR, PLAYER_W);
+        if (playerShadow)
+            SHADOW_place(playerShadow, playerWorldX(), WORLD_Z_NEAR, PLAYER_W);
         if (player) SPR_setPosition(player, playerX, playerY);
         SPR_update();
         // First VBlank: SGDK waits for VBlank start, then flushes DMA/services.
