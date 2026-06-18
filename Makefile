@@ -7,14 +7,14 @@
 #   make run            build then launch in emulator (blastem if found, else ares)
 #   make run-ares       build then launch in ares explicitly
 #   make rebuild-run    clean + build + run
-#   make sgdk-lib       (re)build the SGDK library itself (one-time setup)
+#   make sgdk-lib       BLOCKED — see README (Homebrew GCC breaks XGM2)
+#   make restore-sgdk-lib  copy libmd.a from ghcr.io/stephane-d/sgdk:latest
 # ---------------------------------------------------------------------------
 
 GDK ?= $(CURDIR)/tools/sgdk
 TOOLS_BIN := $(CURDIR)/tools/bin
 
 # Homebrew OpenJDK location on macOS (keg-only, not on PATH by default).
-# Harmless on other platforms where this directory does not exist.
 JAVA_BIN := /opt/homebrew/opt/openjdk/bin
 
 export GDK
@@ -24,6 +24,10 @@ export PATH := $(TOOLS_BIN):$(JAVA_BIN):$(PATH)
 SGDK_EXTRA_FLAGS := -std=gnu11
 
 ROM := out/rom.bin
+SGDK_IMAGE := ghcr.io/stephane-d/sgdk:latest
+DOCKER := $(shell command -v docker 2>/dev/null)
+DOCKER_HOST_SOCK := $(HOME)/.colima/default/docker.sock
+UIDGID := $(shell id -u):$(shell id -g)
 
 # --- Emulator detection -----------------------------------------------------
 UNAME := $(shell uname -s)
@@ -35,19 +39,25 @@ ARES := $(shell command -v ares 2>/dev/null)
 endif
 
 ifneq ($(BLASTEM),)
-# Force NTSC: the game loop waits two VBlanks, giving a clean 30 Hz cadence.
 EMU := $(BLASTEM)
 EMUFLAGS := -r U
 else
-# ares picks region automatically from the ROM header field.
 EMU := $(ARES)
 EMUFLAGS :=
 endif
 
-.PHONY: build clean run run-ares rebuild-run sgdk-lib
+define DOCKER_BUILD
+$(if $(DOCKER),\
+  DOCKER_HOST=unix://$(DOCKER_HOST_SOCK) docker run --rm --platform linux/amd64 \
+    -v "$(CURDIR)":/src -w /src -u $(UIDGID) --entrypoint sh $(SGDK_IMAGE) \
+    -c 'make -f /src/tools/sgdk/makefile.gen EXTRA_FLAGS="$(SGDK_EXTRA_FLAGS)" $(1)',\
+  $(error docker not found — install colima + docker, or use CI ROM builds))
+endef
+
+.PHONY: build clean run run-ares rebuild-run sgdk-lib restore-sgdk-lib
 
 build:
-	$(MAKE) -f $(GDK)/makefile.gen EXTRA_FLAGS="$(SGDK_EXTRA_FLAGS)" release
+	$(call DOCKER_BUILD,release)
 
 clean:
 	$(MAKE) -f $(GDK)/makefile.gen clean
@@ -60,7 +70,18 @@ run-ares: build
 
 rebuild-run: clean run
 
-# One-time: build SGDK's own library (after cloning SGDK into tools/sgdk and
-# building tools/bin/sjasm + tools/bin/bintos, see README).
+restore-sgdk-lib:
+	@test -n "$(DOCKER)" || (echo "docker required"; exit 1)
+	cp -av $(GDK)/lib/libmd.a $(GDK)/lib/libmd.a.broken-local
+	cid=$$(DOCKER_HOST=unix://$(DOCKER_HOST_SOCK) docker create $(SGDK_IMAGE)); \
+	DOCKER_HOST=unix://$(DOCKER_HOST_SOCK) docker cp $$cid:/sgdk/lib/libmd.a $(GDK)/lib/libmd.a; \
+	DOCKER_HOST=unix://$(DOCKER_HOST_SOCK) docker cp $$cid:/sgdk/lib/libmd_debug.a $(GDK)/lib/libmd_debug.a; \
+	DOCKER_HOST=unix://$(DOCKER_HOST_SOCK) docker rm $$cid
+	@strings $(GDK)/lib/libmd.a | grep -m1 "GCC: "
+
 sgdk-lib:
-	$(MAKE) -C $(GDK) -f makelib.gen EXTRA_FLAGS="$(SGDK_EXTRA_FLAGS)"
+	@echo "ERROR: do not run make sgdk-lib with Homebrew m68k-elf-gcc (16.x)."
+	@echo "It miscompiles SGDK's XGM2 driver — PCM crashes on playback."
+	@echo "Restore the Docker-built library instead: make restore-sgdk-lib"
+	@echo "Or rebuild lib inside Docker: docker run ... make -f makelib.gen release"
+	@exit 1

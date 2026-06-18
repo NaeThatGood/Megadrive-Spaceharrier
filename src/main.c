@@ -1102,10 +1102,10 @@ static void handleInput(void)
     if (paused) return;
 
     if (pressed & BUTTON_A)
-        setEnemySpeedStep(enemySpeedStep + 1);
+        setEnemySpeedStep(enemySpeedStep + ENEMY_SPEED_STEP_COUNT - 1);
 
     if (pressed & BUTTON_B)
-        playGetReady();
+        setEnemySpeedStep(enemySpeedStep + 1);
 
     if (pressed & BUTTON_Z)
         setPlayerSpeedStep(playerSpeedStep + 1);

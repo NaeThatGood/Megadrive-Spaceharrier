@@ -22,6 +22,7 @@ material is used.
 
 See the companion documents:
 
+- [docs/build.md](docs/build.md) — **how to build ROMs, libmd.a restore, PCM/XGM2 troubleshooting**
 - [docs/technical-plan.md](docs/technical-plan.md) — architecture and next steps
 - [docs/comparison-notes.md](docs/comparison-notes.md) — measured comparison of the two approaches
 - [docs/asset-budget.md](docs/asset-budget.md) — ROM cost analysis for a 16 Mbit cartridge
@@ -58,20 +59,29 @@ docs/                               technical documentation
 ## Prerequisites
 
 - [SGDK](https://github.com/Stephane-D/SGDK) (cloned into `tools/sgdk`, see below)
-- Java runtime (for SGDK's resource compiler)
-- m68k-elf GCC cross-toolchain
+- **macOS:** Colima + Docker (game builds run inside `ghcr.io/stephane-d/sgdk:latest`)
+- Java runtime (for `make clean` / local ResComp if needed)
 - GNU make
 - An emulator: BlastEm (x86 machines), Ares, or RetroArch + Genesis Plus GX
 - Optional, only to regenerate placeholder assets: Python 3 with Pillow, ffmpeg
+
+Do **not** install Homebrew `m68k-elf-gcc` for this project — it breaks audio if
+used to rebuild `libmd.a`. See [docs/build.md](docs/build.md).
 
 ## Setup
 
 ### macOS
 
+**Never run `make sgdk-lib` with Homebrew `m68k-elf-gcc` (16.x).** It silently
+rebuilds `tools/sgdk/lib/libmd.a` with a broken XGM2 driver (ROM loads fine,
+PCM crashes on playback). The library must be **GCC 13.2.0 crosstool-NG**, matching
+`ghcr.io/stephane-d/sgdk:latest`.
+
 ```sh
-brew install openjdk m68k-elf-gcc m68k-elf-binutils
+brew install openjdk colima docker
 brew install --cask ares-emulator         # emulator (Apple Silicon friendly)
 # BlastEm only works on Intel Macs: brew install blastem
+colima start
 
 # SGDK + its native tools
 git clone https://github.com/Stephane-D/SGDK.git tools/sgdk
@@ -79,29 +89,39 @@ mkdir -p tools/bin
 clang -O2 -o tools/bin/bintos tools/sgdk/tools/bintos/src/bintos.c
 make -C tools/sgdk/tools/sjasm/src && cp tools/sgdk/tools/sjasm/src/sjasm tools/bin/
 
-# build the SGDK library once
-make sgdk-lib
+# Restore the good libmd.a from the official SGDK Docker image (one-time, or after a bad rebuild):
+make restore-sgdk-lib
+strings tools/sgdk/lib/libmd.a | grep -m1 "GCC: "   # → GCC: (crosstool-NG ...) 13.2.0
 ```
 
-Note: Homebrew's OpenJDK is keg-only; the project `Makefile` adds
-`/opt/homebrew/opt/openjdk/bin` to PATH automatically.
+If `tools/sgdk` is newer than the Docker image's bundled SGDK, rebuild the library
+**inside Docker** (still GCC 13.2, never Homebrew):
+
+```sh
+docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src/tools/sgdk \
+  -u "$(id -u):$(id -g)" --entrypoint sh ghcr.io/stephane-d/sgdk:latest \
+  -c 'make -f makelib.gen EXTRA_FLAGS="-std=gnu11 -fno-lto" -j1 release'
+```
+
+Local `make build` runs the game compile inside the same Docker image (GCC 13.2).
+Homebrew's OpenJDK is keg-only; the project `Makefile` adds
+`/opt/homebrew/opt/openjdk/bin` to PATH for `make clean` and rescomp when needed.
 
 ### Linux
 
-```sh
-# Debian/Ubuntu: toolchain from your distro or build via marsdev
-sudo apt install openjdk-17-jre gcc-m68k-linux-gnu make blastem   # if packaged
-# otherwise use https://github.com/andwn/marsdev for the m68k-elf toolchain
+Prefer the same Docker workflow as macOS (see [docs/build.md](docs/build.md)):
 
+```sh
 git clone https://github.com/Stephane-D/SGDK.git tools/sgdk
 mkdir -p tools/bin
 cc -O2 -o tools/bin/bintos tools/sgdk/tools/bintos/src/bintos.c
 make -C tools/sgdk/tools/sjasm/src && cp tools/sgdk/tools/sjasm/src/sjasm tools/bin/
-make sgdk-lib
+make restore-sgdk-lib    # needs Docker
+make build               # runs compile inside ghcr.io/stephane-d/sgdk:latest
 ```
 
-The toolchain prefix defaults to `m68k-elf-`; override with
-`make PREFIX=m68k-linux-gnu-` style variables if yours differs.
+Only run `make sgdk-lib` on Linux if your cross-GCC is **13.2.x** — never with
+GCC 15+ / 16+ (same XGM2 PCM bug as Homebrew on macOS).
 
 ### Windows
 
@@ -143,13 +163,18 @@ that PR's workflow runs (GitHub retains them for 90 days).
 
 ## Build and run
 
+On macOS, start Colima first: `colima start`. Then:
+
 ```sh
-make build        # build out/rom.bin
+make build        # build out/rom.bin (Docker GCC 13.2 on macOS)
 make run          # build + launch in blastem (if found) or ares
 make run-ares     # build + launch in ares explicitly
 make clean        # remove build output
 make rebuild-run  # clean + build + run
+make restore-sgdk-lib   # restore libmd.a from Docker image (after bad rebuild)
 ```
+
+Full troubleshooting (PCM crash, LTO mismatch, test ROMs): [docs/build.md](docs/build.md).
 
 The same four targets are available as Cursor/VS Code tasks
 (`.vscode/tasks.json`): "MD: Build ROM", "MD: Clean", "MD: Run in emulator",
@@ -187,4 +212,7 @@ To use your own voice sample, replace `res/audio/getready.wav` with any mono
   field (region) to `"U               "` so auto-region emulators run the
   ROM in NTSC mode for the 30 fps target.
 - SGDK is compiled with `-std=gnu11` because its `bool` typedef clashes with
-  the C23 default of GCC >= 15 (handled by the Makefile).
+  the C23 default of GCC >= 15 (handled by the Makefile; harmless in Docker).
+- `tools/sgdk/lib/libmd.a` must stay a **crosstool-NG GCC 13.2.0** build from
+  `ghcr.io/stephane-d/sgdk:latest`. Do not run `make sgdk-lib` with Homebrew
+  m68k-elf-gcc — use `make restore-sgdk-lib` or rebuild lib inside Docker.
