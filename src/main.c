@@ -25,9 +25,7 @@
 #define PLAYER_SPEED_DEFAULT  4
 #define PLAYER_SPEED_STEP_COUNT  9
 #define ENEMY_SPEED_DEFAULT  50
-#define ENEMY_SPEED_MIN      10
-#define ENEMY_SPEED_MAX      200
-#define ENEMY_SPEED_STEP     10
+#define ENEMY_SPEED_STEP_COUNT  20
 #define INPUT_STARTUP_SETTLE_FRAMES 8
 #define MAX_TREES            4
 #define TREE_VISIBLE_COUNT   3
@@ -112,7 +110,8 @@ static u16 hurtFlash;
 static u16 playerSpeed;
 static u8 playerSpeedStep;
 static u16 enemySpeedPct;
-static u8 gFramesPerUpdate = 1;
+static u8 enemySpeedStep;
+static u8 gFramesPerUpdate = 2;
 static u16 scrollPhase;
 static u16 prevJoy;
 static u8 inputSettleFrames;
@@ -142,6 +141,12 @@ static s16 bossVy;
 static s16 bossVz;
 
 // --- Helpers ----------------------------------------------------------------
+
+static const u16 ENEMY_SPEED_PCTS[ENEMY_SPEED_STEP_COUNT] =
+{
+    10, 20, 30, 40, 50, 60, 70, 80, 90, 100,
+    110, 120, 130, 140, 150, 160, 170, 180, 190, 200
+};
 
 static const u16 PLAYER_SPEED_PCTS[PLAYER_SPEED_STEP_COUNT] =
 {
@@ -186,6 +191,13 @@ static void refreshEnemySteps(void)
     for (u16 i = 0; i < MAX_OBJECTS; i++)
         if (objects[i].active)
             refreshEnemyStep(&objects[i]);
+}
+
+static void setEnemySpeedStep(u8 step)
+{
+    enemySpeedStep = step % ENEMY_SPEED_STEP_COUNT;
+    enemySpeedPct = ENEMY_SPEED_PCTS[enemySpeedStep];
+    refreshEnemySteps();
 }
 
 static void setPlayerSpeedStep(u8 step)
@@ -375,6 +387,7 @@ static void releaseObjectShadows(void)
 {
     for (u8 i = 0; i < MAX_OBJECTS; i++)
     {
+        objects[i].shadow = NULL;
         SHADOW_release(objShadows[i]);
         objShadows[i] = NULL;
     }
@@ -402,18 +415,15 @@ static void releaseShotsForBoss(void)
     for (u8 i = 0; i < MAX_SHOTS; i++)
     {
         WShot* s = &shots[i];
-        if (i == 0)
-        {
-            if (s->spr) SPR_setVisibility(s->spr, HIDDEN);
-        }
-        else if (s->spr)
+        s->active = FALSE;
+        if (s->spr) SPR_setVisibility(s->spr, HIDDEN);
+        SHADOW_release(s->shadow);
+        s->shadow = NULL;
+        if (i > 0 && s->spr)
         {
             SPR_releaseSprite(s->spr);
             s->spr = NULL;
         }
-        SHADOW_release(s->shadow);
-        s->shadow = NULL;
-        s->active = FALSE;
     }
 }
 
@@ -628,6 +638,29 @@ static void killShot(WShot* s)
     if (s->spr) SPR_setVisibility(s->spr, HIDDEN);
     SHADOW_hide(s->shadow);
     s->active = FALSE;
+}
+
+static void hideGameplaySpritesForBoss(void)
+{
+    for (u8 i = 0; i < TREE_NEAR_SPRITES; i++)
+        setTreePairVisibility(treeNearSprs[i], HIDDEN);
+    for (u8 i = 0; i < TREE_FAR_SPRITES; i++)
+        setTreePairVisibility(treeFarSprs[i], HIDDEN);
+    for (u8 i = 0; i < TREE_VISIBLE_COUNT; i++)
+        SHADOW_hide(treeShadowSprs[i]);
+
+    for (u16 i = 0; i < MAX_OBJECTS; i++)
+    {
+        WObj* o = &objects[i];
+        if (!o->active) continue;
+        renderer->despawn(o);
+        SHADOW_hide(o->shadow);
+        o->active = FALSE;
+        o->shadow = NULL;
+    }
+
+    for (u16 i = 0; i < MAX_SHOTS; i++)
+        killShot(&shots[i]);
 }
 
 static void updateShots(void)
@@ -919,10 +952,16 @@ static void spawnSquillaBoss(void)
     fillSquillaHistory();
     recordSquillaHead();
     bossState = BOSS_STATE_ACTIVE;
+
+    KLog_U1("VRAM tiles free after boss spawn: ", SPR_getFreeVRAM());
+    KLog_U1("  sprite handles active: ", SPR_getNumActiveSprite());
 }
 
 static void updateBossMode(void)
 {
+    if (bossState == BOSS_STATE_OFF)
+        return;
+
     if (bossState == BOSS_STATE_PENDING)
     {
         if (!bossRequestArmed) return;
@@ -931,6 +970,7 @@ static void updateBossMode(void)
         {
             if (!enemyPoolReleased)
             {
+                hideGameplaySpritesForBoss();
                 RENDER_storedRelease();
                 CLOUDS_release();
                 releaseTrees();
@@ -1061,16 +1101,11 @@ static void handleInput(void)
 
     if (paused) return;
 
-    if ((pressed & BUTTON_A) && enemySpeedPct > ENEMY_SPEED_MIN)
-    {
-        enemySpeedPct -= ENEMY_SPEED_STEP;
-        refreshEnemySteps();
-    }
-    if ((pressed & BUTTON_B) && enemySpeedPct < ENEMY_SPEED_MAX)
-    {
-        enemySpeedPct += ENEMY_SPEED_STEP;
-        refreshEnemySteps();
-    }
+    if (pressed & BUTTON_A)
+        setEnemySpeedStep(enemySpeedStep + 1);
+
+    if (pressed & BUTTON_B)
+        playGetReady();
 
     if (pressed & BUTTON_Z)
         setPlayerSpeedStep(playerSpeedStep + 1);
@@ -1111,6 +1146,8 @@ int main(bool hardReset)
     if (IS_PAL_SYSTEM) VDP_setScreenHeight240();
     JOY_setSupport(PORT_1, JOY_SUPPORT_6BTN);
 
+    XGM2_loadDriver(TRUE);
+
     // Ground first: stabilises TILE_MAX_NUM before the sprite engine reserves
     // the VRAM pool used by stored enemy frames, trees, shadows, shots, player.
     GROUND_init();
@@ -1129,7 +1166,7 @@ int main(bool hardReset)
     playerX = PLAYER_CENTER_X;
     playerY = playerMaxY - 8;
     setPlayerSpeedStep(0);
-    enemySpeedPct = ENEMY_SPEED_DEFAULT;
+    setEnemySpeedStep((ENEMY_SPEED_DEFAULT - 10) / 10);
     prevJoy = JOY_readJoypad(JOY_1);
     inputSettleFrames = INPUT_STARTUP_SETTLE_FRAMES;
     enemySpawningEnabled = TRUE;
@@ -1139,17 +1176,24 @@ int main(bool hardReset)
     initSquillaBossData();
     player = SPR_addSprite(&spr_player, playerX, playerY,
                            TILE_ATTR(PAL1, 0, FALSE, FALSE));
-    if (player) SPR_setDepth(player, PLAYER_DEPTH);
+    if (!player)
+        SYS_die("player sprite allocation failed");
+    SPR_setDepth(player, PLAYER_DEPTH);
     playerShadow = SHADOW_add();
+    if (!playerShadow)
+        SYS_die("player shadow allocation failed");
     initTrees();
     initObjectShadows();
     initShots();
 
     renderer = &RENDER_stored;
-    gFramesPerUpdate = 1;
+    gFramesPerUpdate = 2;
     renderer->init();
     SHADOW_init();
     CLOUDS_applyPalette();
+
+    KLog_U1("VRAM tiles free after init: ", SPR_getFreeVRAM());
+    KLog_U1("  sprite handles active: ", SPR_getNumActiveSprite());
 
     GROUND_update(playerX - PLAYER_CENTER_X, playerPitchY(), playerWorldX(), 0,
                   TRUE);
@@ -1162,6 +1206,7 @@ int main(bool hardReset)
     while (TRUE)
     {
         handleInput();
+        SHADOW_beginFrame();
 
         if (!paused)
         {
@@ -1187,10 +1232,14 @@ int main(bool hardReset)
                 }
             }
 
-            updateTrees();
-            updateObjects();
+            if (bossState == BOSS_STATE_OFF ||
+                (bossState == BOSS_STATE_PENDING && !enemyPoolReleased))
+            {
+                updateTrees();
+                updateObjects();
+                updateShots();
+            }
             updateBossMode();
-            updateShots();
             if (renderer->frame) renderer->frame();
 
             if (hurtFlash)

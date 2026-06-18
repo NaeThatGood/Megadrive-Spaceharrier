@@ -3,7 +3,10 @@
 #include "resources.h"
 #include "world.h"
 
+#define SHADOW_RESCALE_BUDGET  2
+#define SHADOW_MAX_SKIP        3
 #define SHADOW_CANVAS_W       64
+#define SHADOW_HALF_CANVAS_W  (SHADOW_CANVAS_W / 2)
 #define SHADOW_CANVAS_H       24
 #define SHADOW_FRAME_COUNT    16
 #define SHADOW_FRAME_MAX_SIZE 64
@@ -21,9 +24,13 @@ static const u8 SHADOW_FRAME_SIZES[SHADOW_FRAME_COUNT] =
 
 typedef struct
 {
-    Sprite* spr;
+    Sprite* sprLeft;
+    Sprite* sprRight;
     u8 frame;
+    u8 skips;
 } ShadowState;
+
+static u8 shadowRescaleCredits;
 
 static u8 shadowFrameForSize[SHADOW_FRAME_MAX_SIZE + 1];
 static ShadowState shadowStates[SHADOW_REGISTRY_COUNT];
@@ -34,10 +41,16 @@ static ShadowState* stateFor(Sprite* s)
     if (!s) return NULL;
 
     for (u8 i = 0; i < SHADOW_REGISTRY_COUNT; i++)
-        if (shadowStates[i].spr == s)
+        if (shadowStates[i].sprLeft == s)
             return &shadowStates[i];
 
     return NULL;
+}
+
+static void hidePair(ShadowState* st)
+{
+    if (st->sprLeft) SPR_setVisibility(st->sprLeft, HIDDEN);
+    if (st->sprRight) SPR_setVisibility(st->sprRight, HIDDEN);
 }
 
 static void initFrameLut(void)
@@ -74,8 +87,10 @@ void SHADOW_init(void)
 
         for (u8 i = 0; i < SHADOW_REGISTRY_COUNT; i++)
         {
-            shadowStates[i].spr = NULL;
+            shadowStates[i].sprLeft = NULL;
+            shadowStates[i].sprRight = NULL;
             shadowStates[i].frame = 0xFF;
+            shadowStates[i].skips = 0;
         }
 
         shadowInitialized = TRUE;
@@ -91,24 +106,53 @@ void SHADOW_init(void)
 
 Sprite* SHADOW_add(void)
 {
-    Sprite* s = SPR_addSprite(&spr_shadow_scaled, -128, -128,
-                              TILE_ATTR(PAL2, 0, FALSE, FALSE));
-    if (!s) return NULL;
-
-    SPR_setDepth(s, SHADOW_DEPTH);
-    SPR_setVisibility(s, HIDDEN);
+    ShadowState* slot = NULL;
 
     for (u8 i = 0; i < SHADOW_REGISTRY_COUNT; i++)
     {
-        if (!shadowStates[i].spr)
+        if (!shadowStates[i].sprLeft)
         {
-            shadowStates[i].spr = s;
-            shadowStates[i].frame = 0xFF;
+            slot = &shadowStates[i];
             break;
         }
     }
+    if (!slot) return NULL;
 
-    return s;
+    slot->sprLeft = SPR_addSprite(&spr_shadow_scaled, -128, -128,
+                                  TILE_ATTR(PAL2, 0, FALSE, FALSE));
+    slot->sprRight = NULL;
+
+    if (slot->sprLeft)
+    {
+        const u16 sharedTile = slot->sprLeft->attribut & ~TILE_ATTR_MASK;
+        slot->sprRight =
+            SPR_addSpriteEx(&spr_shadow_scaled, -128, -128,
+                            TILE_ATTR_FULL(PAL2, 0, FALSE, TRUE, sharedTile),
+                            0);
+    }
+
+    if (!slot->sprLeft || !slot->sprRight)
+    {
+        if (slot->sprRight)
+        {
+            SPR_releaseSprite(slot->sprRight);
+            slot->sprRight = NULL;
+        }
+        if (slot->sprLeft)
+        {
+            SPR_releaseSprite(slot->sprLeft);
+            slot->sprLeft = NULL;
+        }
+        return NULL;
+    }
+
+    SPR_setDepth(slot->sprLeft, SHADOW_DEPTH);
+    SPR_setDepth(slot->sprRight, SHADOW_DEPTH);
+    hidePair(slot);
+    slot->frame = 0xFF;
+    slot->skips = 0;
+
+    return slot->sprLeft;
 }
 
 void SHADOW_release(Sprite* s)
@@ -116,27 +160,43 @@ void SHADOW_release(Sprite* s)
     if (!s) return;
 
     ShadowState* st = stateFor(s);
-    if (st)
-    {
-        st->spr = NULL;
-        st->frame = 0xFF;
-    }
+    if (!st) return;
 
-    SPR_releaseSprite(s);
+    if (st->sprRight)
+    {
+        SPR_releaseSprite(st->sprRight);
+        st->sprRight = NULL;
+    }
+    if (st->sprLeft)
+    {
+        SPR_releaseSprite(st->sprLeft);
+        st->sprLeft = NULL;
+    }
+    st->frame = 0xFF;
+    st->skips = 0;
+}
+
+void SHADOW_beginFrame(void)
+{
+    shadowRescaleCredits = SHADOW_RESCALE_BUDGET;
 }
 
 void SHADOW_hide(Sprite* s)
 {
-    if (s) SPR_setVisibility(s, HIDDEN);
+    ShadowState* st = stateFor(s);
+    if (st) hidePair(st);
 }
 
 void SHADOW_place(Sprite* s, s16 wx, u16 z, u16 casterSizePx)
 {
     if (!s) return;
 
+    ShadowState* st = stateFor(s);
+    if (!st || !st->sprLeft || !st->sprRight) return;
+
     if (casterSizePx < SHADOW_MIN_SIZE || z >= SHADOW_FAR_CULL_Z)
     {
-        SHADOW_hide(s);
+        hidePair(st);
         return;
     }
 
@@ -144,15 +204,36 @@ void SHADOW_place(Sprite* s, s16 wx, u16 z, u16 casterSizePx)
     const s16 sx = WORLD_screenXq(wx, q);
     const s16 syG = WORLD_screenYBq(0, q) + GROUND_VISIBLE_HORIZON_PAD;
     const u8 frame = sizeToFrame(casterSizePx);
-    ShadowState* st = stateFor(s);
 
-    if (!st || frame != st->frame)
+    if (frame != st->frame)
     {
-        SPR_setFrame(s, frame);
-        if (st) st->frame = frame;
+        const u8 force = (st->frame == 0xFF);
+        const u8 allow = force ||
+                         (shadowRescaleCredits > 0) ||
+                         (st->skips >= SHADOW_MAX_SKIP);
+        if (allow)
+        {
+            SPR_setFrame(st->sprLeft, frame);
+            SPR_setFrame(st->sprRight, frame);
+            st->frame = frame;
+            st->skips = 0;
+            if (!force && shadowRescaleCredits > 0)
+                shadowRescaleCredits--;
+        }
+        else
+        {
+            st->skips++;
+        }
+    }
+    else
+    {
+        st->skips = 0;
     }
 
-    SPR_setPosition(s, sx - (SHADOW_CANVAS_W / 2),
-                    syG - (SHADOW_CANVAS_H / 2));
-    SPR_setVisibility(s, VISIBLE);
+    const s16 x = sx - (SHADOW_CANVAS_W / 2);
+    const s16 y = syG - (SHADOW_CANVAS_H / 2);
+    SPR_setPosition(st->sprLeft, x, y);
+    SPR_setPosition(st->sprRight, x + SHADOW_HALF_CANVAS_W, y);
+    SPR_setVisibility(st->sprLeft, VISIBLE);
+    SPR_setVisibility(st->sprRight, VISIBLE);
 }

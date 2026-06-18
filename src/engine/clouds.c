@@ -3,6 +3,7 @@
 #include "resources.h"
 
 #define CLOUD_PAL_BASE        12
+#define CLOUDS_DISABLED       1
 #define SCREEN_W              320
 
 #define CLOUD_VARIANTS        3
@@ -136,6 +137,12 @@ void CLOUDS_applyPalette(void)
 
 void CLOUDS_init(void)
 {
+#if CLOUDS_DISABLED
+    cloudState = CLOUD_STATE_HIDDEN;
+    cloudEvictFrame = 0;
+    return;
+#endif
+
     CLOUDS_applyPalette();
     cloudState = CLOUD_STATE_NORMAL;
     cloudEvictFrame = 0;

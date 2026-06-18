@@ -31,6 +31,6 @@ SPRITE spr_squilla_tail_3 "sprites/squilla_tail_3.png" 5 3 FAST
 SPRITE spr_squilla_tail_4 "sprites/squilla_tail_4.png" 3 2 FAST
 SPRITE spr_tree_scaled "sprites/tree_scaled.png" 4 27 FAST
 SPRITE spr_tree_scaled_far "sprites/tree_scaled_far.png" 4 12 FAST
-SPRITE spr_shadow_scaled "sprites/shadow_scaled.png" 8 3 FAST
+SPRITE spr_shadow_scaled "sprites/shadow_scaled.png" 4 3 FAST
 SPRITE spr_shot "sprites/shot.png" 1 1 FAST
 WAV    snd_getready "audio/getready.wav" XGM2

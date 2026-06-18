@@ -2,7 +2,11 @@
 """Generate the shared scaled ground-shadow strip.
 
 Outputs:
-  res/sprites/shadow_scaled.png  16 frames, each on a 64x24 canvas
+  res/sprites/shadow_scaled.png  16 frames, each on a 32x24 half canvas
+
+The game draws the second half with the VDP horizontal flip bit, so the visible
+shadow is a symmetric ellipse at full 64x24 display size while using half the
+VRAM per shadow instance.
 
 Frame ellipse widths, used by src/engine/shadow.c:
    8, 11, 15, 18, 22, 25, 29, 32,
@@ -19,7 +23,8 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPRITES = os.path.join(ROOT, "res", "sprites")
 
-CANVAS_W = 64
+FULL_CANVAS_W = 64
+HALF_CANVAS_W = FULL_CANVAS_W // 2
 CANVAS_H = 24
 FRAME_COUNT = 16
 WIDTHS = [
@@ -45,19 +50,19 @@ def make_palette(colors):
 def main():
     os.makedirs(SPRITES, exist_ok=True)
 
-    strip = Image.new("P", (CANVAS_W * FRAME_COUNT, CANVAS_H), 0)
-    strip.putpalette(make_palette(PALETTE))
-    strip.info["transparency"] = 0
+    full = Image.new("P", (FULL_CANVAS_W * FRAME_COUNT, CANVAS_H), 0)
+    full.putpalette(make_palette(PALETTE))
+    full.info["transparency"] = 0
 
-    px = strip.load()
+    px = full.load()
     cy = CANVAS_H // 2
-    cx = CANVAS_W // 2
+    cx = FULL_CANVAS_W // 2
 
     for frame, width in enumerate(WIDTHS):
         height = max(2, round(width / 3))
         rx = width / 2.0
         ry = height / 2.0
-        ox = frame * CANVAS_W
+        ox = frame * FULL_CANVAS_W
         min_x = cx - ((width + 1) // 2)
         max_x = cx + (width // 2)
         min_y = cy - ((height + 1) // 2)
@@ -70,9 +75,18 @@ def main():
                 if nx * nx + ny * ny <= 1.0 and ((x + y) & 1) == 0:
                     px[ox + x, y] = SHADOW_INDEX
 
+    half = Image.new("P", (HALF_CANVAS_W * FRAME_COUNT, CANVAS_H), 0)
+    half.putpalette(full.getpalette())
+    half.info["transparency"] = 0
+    for frame in range(FRAME_COUNT):
+        half.paste(full.crop((frame * FULL_CANVAS_W, 0,
+                              frame * FULL_CANVAS_W + HALF_CANVAS_W, CANVAS_H)),
+                   (frame * HALF_CANVAS_W, 0))
+
     out = os.path.join(SPRITES, "shadow_scaled.png")
-    strip.save(out)
-    print(f"wrote shadow_scaled.png: {FRAME_COUNT} frames, {CANVAS_W}x{CANVAS_H}")
+    half.save(out)
+    print(f"wrote shadow_scaled.png: {FRAME_COUNT} mirrored half frames, "
+          f"{HALF_CANVAS_W}x{CANVAS_H}")
 
 
 if __name__ == "__main__":
